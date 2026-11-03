@@ -122,6 +122,19 @@ $env:SOC_L2_CHALLENGE_WORKBOOK = 'D:\Cursos\Soc 2- Comunidad Dojo\SOC_L2_Logs_Am
 Remove-Item Env:SOC_L2_CHALLENGE_WORKBOOK -ErrorAction SilentlyContinue
 ```
 
-El frontend no está incluido en esta fase y no se modifica `package.json`.
 No se deben guardar el workbook ni otros datasets del desafío en el
 repositorio.
+
+## Frontend local
+
+La interfaz React/TypeScript está en [`frontend/`](./frontend/README.md).
+Iniciá primero el backend y luego, en otra terminal PowerShell:
+
+```powershell
+Set-Location .\frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
+Abrí <http://127.0.0.1:5173>. Vite redirige `/api/*` al backend local
+`http://127.0.0.1:8000/*`; no requiere cambios de CORS en FastAPI.

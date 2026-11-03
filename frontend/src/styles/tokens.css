@@ -1,0 +1,31 @@
+:root {
+  font-family:
+    Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  color: #dce8f3;
+  background: #07111d;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --bg-root: #07111d;
+  --bg-sidebar: #091522;
+  --bg-panel: #0c1928;
+  --bg-panel-raised: #101f30;
+  --bg-input: #091522;
+  --border: rgba(144, 172, 202, 0.13);
+  --border-strong: rgba(144, 172, 202, 0.22);
+  --text-primary: #e4edf7;
+  --text-secondary: #9aacc0;
+  --text-muted: #65798e;
+  --blue: #5798ff;
+  --cyan: #38d7e8;
+  --green: #39d6a0;
+  --amber: #ffbd5a;
+  --red: #ff647c;
+  --violet: #a38bff;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shadow-panel: 0 12px 35px rgba(0, 0, 0, 0.16);
+}
