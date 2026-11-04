@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from collections import Counter
 from datetime import date, datetime
 from io import BytesIO
@@ -27,7 +28,15 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.analysis import ingest_workbook
+from app.hashes import file_sha256
+from app.r13 import R13Finding, evaluate_r13
+
 ReportType = Literal["executive", "technical"]
+
+
+class ReportContentMismatchError(ValueError):
+    """El resultado del análisis no corresponde al workbook usado para el PDF."""
 SOURCE_FIELDS = (
     "Destination",
     "Log_Source",
@@ -162,6 +171,157 @@ def _display(value: Any) -> str:
     return str(value)
 
 
+def _require_result_matches_content(
+    result: dict[str, Any], content: bytes
+) -> None:
+    expected = result.get("file_sha256")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise ReportContentMismatchError(
+            "El resultado del análisis no contiene un SHA-256 hexadecimal válido."
+        )
+    try:
+        actual = file_sha256(content)
+    except TypeError as exc:
+        raise ReportContentMismatchError(
+            "El contenido del workbook no permite calcular su SHA-256."
+        ) from exc
+    if actual != expected:
+        raise ReportContentMismatchError(
+            "El resultado del análisis no corresponde al contenido del workbook."
+        )
+
+
+def _timezone_description(status: Any) -> str:
+    if status == "undefined":
+        return (
+            "La zona horaria no está definida en este contrato parcial ni "
+            "determinada por el análisis disponible; los timestamps se presentan "
+            "tal como fueron recibidos, sin conversión."
+        )
+    if status is None:
+        return "La zona horaria no está especificada."
+    return f"Estado de zona horaria informado: {status}."
+
+
+def _r13_findings(content: bytes) -> dict[str, R13Finding]:
+    ingestion = ingest_workbook(content)
+    evaluation = evaluate_r13(
+        ingestion.r13_events,
+        externally_conflicting_log_ids=ingestion.r13_conflicting_log_ids,
+    )
+    return {finding.source_ip_key: finding for finding in evaluation.findings}
+
+
+def _r13_evidence_groups(
+    observation: dict[str, Any],
+    findings: dict[str, R13Finding],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    source_ip = next(
+        (
+            item.get("Source_IP")
+            for item in observation["evidence"]
+            if item.get("Source_IP") is not None
+        ),
+        None,
+    )
+    if not isinstance(source_ip, str):
+        raise ValueError("La observación R13 no contiene Source_IP.")
+    try:
+        source_ip_key = ipaddress.ip_address(source_ip).compressed
+    except ValueError as exc:
+        raise ValueError("La observación R13 contiene Source_IP inválida.") from exc
+
+    finding = findings.get(source_ip_key)
+    if finding is None:
+        raise ValueError(
+            "No se pudo reproducir la ventana R13 para la evidencia del informe."
+        )
+    all_ids = tuple(
+        str(item["Log_ID"])
+        for item in observation["evidence"]
+        if item.get("Log_ID") is not None
+    )
+    qualifying_ids = finding.qualifying_window_log_ids
+    if not set(qualifying_ids).issubset(all_ids):
+        raise ValueError(
+            "La ventana R13 reproducida no coincide con la evidencia de la observación."
+        )
+    qualifying_set = set(qualifying_ids)
+    contextual_ids = tuple(log_id for log_id in all_ids if log_id not in qualifying_set)
+    return qualifying_ids, contextual_ids
+
+
+def _shared_evidence_description(result: dict[str, Any]) -> str | None:
+    rules_by_log_id: dict[str, set[str]] = {}
+    for observation in result["observations"]:
+        for evidence in observation["evidence"]:
+            log_id = evidence.get("Log_ID")
+            if log_id is not None:
+                rules_by_log_id.setdefault(str(log_id), set()).add(
+                    observation["rule_id"]
+                )
+    shared = [
+        f'{log_id} ({", ".join(sorted(rule_ids))})'
+        for log_id, rule_ids in sorted(rules_by_log_id.items())
+        if len(rule_ids) > 1
+    ]
+    if not shared:
+        return None
+    return (
+        "Un mismo Log_ID puede respaldar más de una regla; su reutilización no "
+        "representa eventos independientes. Evidencia compartida: "
+        + "; ".join(shared)
+        + "."
+    )
+
+
+def _r08_evidence_summary(observation: dict[str, Any]) -> str | None:
+    evidence = observation["evidence"]
+    primary = [
+        item
+        for item in evidence
+        if item.get("Event_ID") == "4688" and item.get("Log_ID") is not None
+    ]
+    if not primary:
+        return None
+    primary_ids = {str(item["Log_ID"]) for item in primary}
+    related_by_rule: dict[str, list[str]] = {"R07": [], "R09": []}
+    other_related: list[str] = []
+    for item in evidence:
+        log_id = item.get("Log_ID")
+        if log_id is None or str(log_id) in primary_ids:
+            continue
+        event_id = item.get("Event_ID")
+        if event_id == "4663":
+            related_by_rule["R07"].append(str(log_id))
+        elif event_id == "PROXY_ACCESS":
+            related_by_rule["R09"].append(str(log_id))
+        else:
+            other_related.append(str(log_id))
+
+    parts = [
+        "Evidencia primaria R08: " + ", ".join(sorted(primary_ids)) + "."
+    ]
+    for rule_id, log_ids in related_by_rule.items():
+        if log_ids:
+            parts.append(
+                f"Asociación temporal/identitaria {rule_id} "
+                f"({len(log_ids)} registros): {', '.join(sorted(log_ids))}."
+            )
+    if other_related:
+        parts.append(
+            "Otras evidencias asociadas: " + ", ".join(sorted(other_related)) + "."
+        )
+    parts.append(
+        "La asociación no demuestra causalidad, transferencia exitosa ni exfiltración."
+    )
+    return " ".join(parts)
+
+
 def _paragraph(text: Any, style: ParagraphStyle) -> Paragraph:
     escaped = escape(str(text)).replace("\r\n", "\n").replace("\n", "<br/>")
     return Paragraph(escaped, style)
@@ -285,10 +445,16 @@ def _document(title: str, story: list[Any], result: dict[str, Any]) -> bytes:
     return output.getvalue()
 
 
-def build_executive_pdf(result: dict[str, Any]) -> bytes:
+def build_executive_pdf(result: dict[str, Any], content: bytes) -> bytes:
+    _require_result_matches_content(result, content)
     styles, _, _ = _styles()
     completeness = result["completeness"]
     observations = result["observations"]
+    r13_findings = (
+        _r13_findings(content)
+        if any(item["rule_id"] == "R13" for item in observations)
+        else {}
+    )
     severities = Counter(
         item["severity"]
         for item in observations
@@ -306,7 +472,9 @@ def build_executive_pdf(result: dict[str, Any]) -> bytes:
         _paragraph(
             "Se procesó el workbook validado por la API y se aplicaron únicamente las "
             "reglas cuyo alcance figura como ejecutado o parcialmente ejecutado. "
-            "No se presentan scoring ni severidades no evaluables como valores calculados.",
+            "No se presentan scoring ni severidades no evaluables como valores calculados. "
+            "La severidad analítica ratificada es independiente del nivel y del score; "
+            "por ejemplo, R11 puede tener severidad Medium con nivel y score no evaluables.",
             styles["body"],
         ),
         _paragraph("Estadísticas del análisis", styles["section"]),
@@ -341,6 +509,9 @@ def build_executive_pdf(result: dict[str, Any]) -> bytes:
         )
 
     story.append(_paragraph("Hallazgos y evidencia relevante", styles["section"]))
+    shared_evidence = _shared_evidence_description(result)
+    if shared_evidence:
+        story.append(_paragraph(shared_evidence, styles["body"]))
     if not observations:
         story.append(
             _paragraph(
@@ -359,19 +530,61 @@ def build_executive_pdf(result: dict[str, Any]) -> bytes:
                 styles["subheading"],
             ),
             _paragraph(observation["description"], styles["body"]),
-            _paragraph(
-                f"Log_ID: {ids}. Severidad: "
-                f'{observation["severity"] or "No definida"}; nivel: '
-                f'{observation["level"] if observation["level"] is not None else "No evaluable"}; '
-                f'score: {observation["score_1e4"] if observation["score_1e4"] is not None else "No evaluable"}.',
-                styles["body"],
-            ),
+        ]
+        if observation["rule_id"] == "R13":
+            qualifying_ids, contextual_ids = _r13_evidence_groups(
+                observation,
+                r13_findings,
+            )
+            metrics = r13_findings[
+                ipaddress.ip_address(
+                    next(
+                        item["Source_IP"]
+                        for item in observation["evidence"]
+                        if item.get("Source_IP") is not None
+                    )
+                ).compressed
+            ].metrics
+            detail.append(
+                _paragraph(
+                    f"Log_ID de la ventana que sustenta las métricas "
+                    f"({metrics.request_count} solicitudes): "
+                    f'{", ".join(qualifying_ids)}.',
+                    styles["body"],
+                )
+            )
+            if contextual_ids:
+                detail.append(
+                    _paragraph(
+                        f"Evidencia adicional de otras ventanas calificantes "
+                        f"({len(contextual_ids)} registros; no integra las métricas "
+                        f"anteriores): {', '.join(contextual_ids)}.",
+                        styles["body"],
+                    )
+                )
+        elif observation["rule_id"] == "R08":
+            summary = _r08_evidence_summary(observation)
+            if summary:
+                detail.append(_paragraph(summary, styles["body"]))
+            else:
+                detail.append(_paragraph(f"Log_ID: {ids}.", styles["body"]))
+        else:
+            detail.append(_paragraph(f"Log_ID: {ids}.", styles["body"]))
+        detail.extend(
+            [
+                _paragraph(
+                    f"Severidad: {observation['severity'] or 'No definida'}; "
+                    f'nivel: {observation["level"] if observation["level"] is not None else "No evaluable"}; '
+                    f'score: {observation["score_1e4"] if observation["score_1e4"] is not None else "No evaluable"}.',
+                    styles["body"],
+                ),
             _paragraph(
                 f'Impacto demostrado: {"Sí" if observation["impact_demonstrated"] else "No"}; '
                 f'atribución de incidente: {"Sí" if observation["incident_attribution"] else "No"}.',
                 styles["body"],
-            ),
-        ]
+                ),
+            ]
+        )
         story.append(KeepTogether(detail))
 
     story.append(_paragraph("Recomendaciones de validación", styles["section"]))
@@ -401,11 +614,16 @@ def build_executive_pdf(result: dict[str, Any]) -> bytes:
     story.append(_paragraph("Limitaciones", styles["section"]))
     story.append(
         _paragraph(
-            f'Estado de zona horaria: {result["timezone_status"]}. '
+            _timezone_description(result["timezone_status"])
+            + " "
             "Scoring y cadenas no ratificadas o no evaluables no se completan ni se infieren. "
             f'La cadena C2 permanece en estado '
             f'{result["chain_execution"]["C2"]["status"]}; no se presenta como incidente '
             "ni se le asigna score operativo. "
+            "Las direcciones clasificadas como documentation, incluidos los rangos "
+            "RFC 5737, no representan conexiones operativas a Internet. "
+            "La validación de snapshots IANA no autentica el origen ni demuestra "
+            "conectividad real. "
             "El informe refleja exclusivamente el resultado parcial de esta ejecución.",
             styles["body"],
         )
@@ -442,13 +660,22 @@ def _technical_rule_table(result: dict[str, Any], styles: dict[str, ParagraphSty
 
 
 def build_technical_pdf(result: dict[str, Any], content: bytes) -> bytes:
+    _require_result_matches_content(result, content)
     styles, _, _ = _styles()
     source_by_id, duplicate_ids = _source_records(content)
+    observations = result["observations"]
+    r13_findings = (
+        _r13_findings(content)
+        if any(item["rule_id"] == "R13" for item in observations)
+        else {}
+    )
     story: list[Any] = [
         _paragraph("Informe técnico de análisis SIEM", styles["title"]),
         _paragraph(
             "Alcance parcial. Los valores que no fueron evaluables se identifican como tales; "
-            "las correlaciones no materializadas no se presentan como cadenas confirmadas.",
+            "las correlaciones no materializadas no se presentan como cadenas confirmadas. "
+            "Una severidad analítica ratificada, como Medium para R11, es independiente "
+            "del nivel y del score; esos campos pueden seguir no evaluables.",
             styles["body"],
         ),
         *_metadata_lines(result, styles),
@@ -472,7 +699,10 @@ def build_technical_pdf(result: dict[str, Any], content: bytes) -> bytes:
             )
         )
     story.append(_paragraph("Observaciones y evidencia", styles["section"]))
-    if not result["observations"]:
+    shared_evidence = _shared_evidence_description(result)
+    if shared_evidence:
+        story.append(_paragraph(shared_evidence, styles["body"]))
+    if not observations:
         story.append(
             _paragraph(
                 "No se emitieron observaciones bajo los predicados implementados. "
@@ -481,7 +711,7 @@ def build_technical_pdf(result: dict[str, Any], content: bytes) -> bytes:
             )
         )
 
-    for observation in result["observations"]:
+    for observation in observations:
         story.append(PageBreak())
         page_state = _ObservationPageState()
         story.append(_ObservationPageAnchor(page_state))
@@ -511,6 +741,38 @@ def build_technical_pdf(result: dict[str, Any], content: bytes) -> bytes:
                 styles["body"],
             )
         )
+        if observation["rule_id"] == "R13":
+            qualifying_ids, contextual_ids = _r13_evidence_groups(
+                observation,
+                r13_findings,
+            )
+            source_ip = next(
+                item["Source_IP"]
+                for item in observation["evidence"]
+                if item.get("Source_IP") is not None
+            )
+            metrics = r13_findings[ipaddress.ip_address(source_ip).compressed].metrics
+            story.append(
+                _paragraph(
+                    f"Log_ID de la ventana que sustenta las métricas "
+                    f"({metrics.request_count} solicitudes): "
+                    f'{", ".join(qualifying_ids)}.',
+                    styles["body"],
+                )
+            )
+            if contextual_ids:
+                story.append(
+                    _paragraph(
+                        f"Evidencia adicional de otras ventanas calificantes "
+                        f"({len(contextual_ids)} registros; no integra las métricas "
+                        f"anteriores): {', '.join(contextual_ids)}.",
+                        styles["body"],
+                    )
+                )
+        elif observation["rule_id"] == "R08":
+            summary = _r08_evidence_summary(observation)
+            if summary:
+                story.append(_paragraph(summary, styles["body"]))
         story.append(_paragraph("Evidencia", styles["subheading"]))
         for evidence in observation["evidence"]:
             log_id_value = evidence["Log_ID"]
@@ -524,7 +786,7 @@ def build_technical_pdf(result: dict[str, Any], content: bytes) -> bytes:
                 f'Source_IP: {_display(evidence["Source_IP"])}',
                 f'Categoría IP: {_display(evidence["source_ip_category"])}',
                 f'Fuente de clasificación IP: {_display(evidence["ip_classification_source"])}',
-                f'Validación del registro IP: {_display(evidence["ip_registry_validation_status"])}',
+                f'Validación del snapshot IANA: {_display(evidence["ip_registry_validation_status"])}',
             ]
             if log_id is None:
                 evidence_parts.append("Campos adicionales: no disponibles sin Log_ID.")
@@ -571,8 +833,13 @@ def build_technical_pdf(result: dict[str, Any], content: bytes) -> bytes:
         ),
         _paragraph("Limitaciones metodológicas", styles["section"]),
         _paragraph(
-            f'Zona horaria: {result["timezone_status"]}. '
+            _timezone_description(result["timezone_status"])
+            + " "
             f'Estado de clasificación IP: {result["ip_classification_status"]}. '
+            "El estado verified indica que los snapshots IANA se validaron contra "
+            "su manifiesto y hashes; no autentica la IP de origen ni demuestra "
+            "conectividad real. Las categorías documentation (incluidos rangos "
+            "RFC 5737) no se presentan como conexiones operativas a Internet. "
             "No se infieren causalidad, éxito, impacto, atribución, scoring ausente ni "
             "correlaciones que no estén materializadas en el resultado.",
             styles["body"],
@@ -585,5 +852,5 @@ def build_pdf_report(
     report_type: ReportType, result: dict[str, Any], content: bytes
 ) -> bytes:
     if report_type == "executive":
-        return build_executive_pdf(result)
+        return build_executive_pdf(result, content)
     return build_technical_pdf(result, content)

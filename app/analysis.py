@@ -1058,8 +1058,9 @@ def _evaluate_rules(
                 "Se observaron al menos 10 valores literales distintos de "
                 "Process_CommandLine en una ventana deslizante de 10 minutos "
                 "para la misma clave (User, Hostname, Destination). El campo "
-                "puede describir accesos a archivos y no demuestra ejecución, "
-                "exfiltración ni impacto.",
+                "puede describir accesos a archivos; cada valor distinto no "
+                "equivale necesariamente a una lectura exitosa independiente. "
+                "La observación no demuestra ejecución, exfiltración ni impacto.",
                 evidence=tuple(dict(item) for item in finding.evidence),
             )
         )
@@ -1084,9 +1085,11 @@ def _evaluate_rules(
                 "R08",
                 _RULE_NAMES["R08"],
                 (),
-                f"Se observó la herramienta {finding.archive.tool} con salida "
+                f"Evidencia primaria R08: {finding.event.log_id}. Se observó la "
+                f"herramienta {finding.archive.tool} con salida "
                 f"{finding.archive.output_path} ({destination_label}); se asocia "
-                f"temporal e identitariamente con {' y '.join(related_rules)}. "
+                f"temporal e identitariamente, no causalmente, con "
+                f"{' y '.join(related_rules)}. "
                 "Esta asociación contextual no demuestra causalidad, transferencia "
                 "exitosa, exfiltración ni impacto.",
                 evidence=tuple(dict(item) for item in finding.evidence),

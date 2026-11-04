@@ -283,6 +283,17 @@ def test_ipv4_mapped_ipv6_evidence_preserves_original_address_representation() -
     assert finding.evidence[0]["source_ip_category"] == "documentation"
 
 
+def test_finding_preserves_the_first_qualifying_window_log_ids() -> None:
+    events = _events(21, interval=timedelta(seconds=12), result=500)
+
+    finding = _finding(events)
+
+    assert finding.qualifying_window_log_ids == tuple(
+        event.log_id for event in events[:10]
+    )
+    assert len(finding.evidence) == 21
+
+
 def test_identical_log_id_duplicates_count_once() -> None:
     unique = _events(9, result=500)
     duplicate = R13Event(

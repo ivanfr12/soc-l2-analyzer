@@ -61,6 +61,7 @@ class R13Metrics:
 class R13Finding:
     source_ip_key: str
     metrics: R13Metrics
+    qualifying_window_log_ids: tuple[str, ...]
     evidence: tuple[Mapping[str, Any], ...]
 
 
@@ -213,6 +214,7 @@ def evaluate_r13(
         error_count = 0
         sensitive_route_count = 0
         first_qualifying_metrics: R13Metrics | None = None
+        first_qualifying_window_log_ids: tuple[str, ...] = ()
 
         while start < len(ordered):
             anchor_time = ordered[start].timestamp
@@ -244,6 +246,9 @@ def evaluate_r13(
             if metrics.qualifies:
                 if first_qualifying_metrics is None:
                     first_qualifying_metrics = metrics
+                    first_qualifying_window_log_ids = tuple(
+                        event.log_id for event in ordered[left:right]
+                    )
                 for event in ordered[left:right]:
                     contributors[event.log_id] = event
             start = end
@@ -258,6 +263,7 @@ def evaluate_r13(
                 R13Finding(
                     source_ip_key=source_ip_key,
                     metrics=first_qualifying_metrics,
+                    qualifying_window_log_ids=first_qualifying_window_log_ids,
                     evidence=evidence,
                 )
             )
