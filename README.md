@@ -1,111 +1,144 @@
 # SOC L2 Analyzer
 
-Backend en Python para validar y analizar parcialmente el workbook SIEM del
-desafío. `POST /analyze` devuelve `analysis-partial/1` y ejecuta únicamente
-predicados deterministas que tienen condiciones suficientes; las reglas con
-ventanas o correlaciones incompletas se marcan pendientes, sin afirmar
-incidentes ni impacto. El contrato completo de `AnalysisResult`, los vectores
-y serialización de `cj/1`, los catálogos E/K y los snapshots IANA aún no están
-disponibles. El diagnóstico y los límites están en
-[`docs/PHASE4_DECISIONS.md`](./docs/PHASE4_DECISIONS.md).
+Aplicación local para analizar workbooks Excel (`.xlsx`) con registros SIEM
+mediante un backend **FastAPI** en Python y una interfaz **React + TypeScript**
+con Vite. El motor ejecuta reglas deterministas, entrega resultados parciales
+con evidencia trazable y permite visualizar el dashboard y descargar informes
+PDF ejecutivo y técnico.
+
+El producto no es un SIEM completo ni una plataforma de respuesta automática.
+Una observación no confirma por sí sola un incidente, impacto, causalidad,
+atribución, exfiltración ni ejecución exitosa.
 
 ## Requisitos
 
-- Windows
-- Python 3.12 (validado con Python 3.12.3)
-- Git
-- PowerShell
+- Windows, PowerShell y Git.
+- Python 3.12 (validado con Python 3.12.3).
+- Node.js 22.22.2+ o 24.15+ y npm para el frontend.
 
-## Obtener el repositorio
+## Preparación
 
-Clonar el repositorio si todavía no está disponible localmente:
+Desde PowerShell, clonar el repositorio si todavía no está disponible:
 
 ```powershell
 git clone https://github.com/ivanfr12/soc-l2-analyzer.git
 Set-Location .\soc-l2-analyzer
 ```
 
-Si ya está clonado, abrir una terminal PowerShell en la raíz del repositorio.
-
-## Preparar el entorno e iniciar la API
-
-Crear el entorno virtual si aún no existe e instalar las dependencias fijadas.
-No hace falta activar el entorno:
+Crear el entorno virtual Python e instalar las dependencias fijadas:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Instalar las dependencias del frontend desde su lockfile:
+
+```powershell
+Set-Location .\frontend
+npm.cmd ci
+Set-Location ..
+```
+
+## Iniciar la aplicación
+
+Abrir dos terminales PowerShell desde la raíz del repositorio.
+
+Terminal 1 — backend:
+
+```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Si `.venv` ya existe, no volver a ejecutar la creación. Uvicorn queda disponible
-en `http://127.0.0.1:8000`. Para detenerlo, pulsar `Ctrl+C`.
+La API local queda disponible en `http://127.0.0.1:8000`. La documentación
+interactiva OpenAPI está en `http://127.0.0.1:8000/docs`.
 
-## Comprobación de la API
+Terminal 2 — frontend:
 
 ```powershell
-Invoke-RestMethod -Uri http://127.0.0.1:8000/health
-Invoke-RestMethod -Uri http://127.0.0.1:8000/meta
+Set-Location .\frontend
+npm.cmd run dev
 ```
 
-También se pueden abrir estas URLs en el navegador:
-
-- Health: <http://127.0.0.1:8000/health>
-- Metadata: <http://127.0.0.1:8000/meta>
-- Swagger UI: <http://127.0.0.1:8000/docs>
-
-La respuesta de health es `{"status":"ok"}`. Metadata informa las versiones
-de esquema/canonicalización, la hoja y columnas requeridas, el límite de carga
-y `analysis_mode="partial"`.
+Abrir `http://127.0.0.1:5173`. El proxy de desarrollo reenvía `/api/*` a la API
+local y quita ese prefijo; no hace falta habilitar CORS para este flujo.
 
 ## Analizar un workbook
 
-1. Abrir `http://127.0.0.1:8000/docs` en el navegador mientras Uvicorn está
-   ejecutándose.
-2. Expandir `POST /analyze` y pulsar **Try it out**.
-3. Seleccionar el Excel `.xlsx` en el campo `file` y pulsar **Execute**.
+1. Abrir la interfaz, seleccionar o arrastrar un archivo `.xlsx` y elegir
+   **Analizar workbook**.
+2. El dashboard muestra el estado parcial, la cobertura de reglas y las
+   observaciones con referencias a `Log_ID`.
+3. Si el análisis finaliza correctamente y su archivo sigue asociado, se pueden
+   descargar el **informe ejecutivo** y el **informe técnico**.
 
-El endpoint también puede llamarse desde PowerShell:
+La API también acepta el archivo desde `/docs`, mediante `POST /analyze`, o con
+PowerShell:
 
 ```powershell
-curl.exe -F "file=@D:\ruta\al\archivo.xlsx" http://127.0.0.1:8000/analyze
+curl.exe -F "file=@.\archivo.xlsx" http://127.0.0.1:8000/analyze
 ```
 
-La carga valida firma ZIP, lectura con OpenPyXL, hoja `SIEM Export`, las 12
-columnas esperadas y tamaño máximo de 10 MiB. Archivos inválidos reciben un
-error HTTP controlado; el servidor no devuelve trazas internas.
+La carga está limitada a 10 MiB. Se valida extensión, firma ZIP, lectura con
+OpenPyXL, hoja `SIEM Export` y las 12 columnas requeridas. Los archivos vacíos,
+corruptos, no XLSX o con estructura incompleta se rechazan con errores
+controlados.
 
-### Interpretación de `analysis-partial/1`
+### Informes PDF
 
-- HTTP 200 para un archivo aceptado significa que se produjo una respuesta
-  **parcial**, no que el workbook pasó por todas las reglas ni que exista un
+Después de un análisis exitoso, la interfaz permite descargar ambos informes.
+`POST /reports/executive` y `POST /reports/technical` reciben el mismo archivo
+analizado y su `expected_file_sha256`; el servidor valida el hash, vuelve a
+ejecutar el análisis y genera el PDF sin conservar el workbook ni el informe.
+Una discrepancia de hash se rechaza con HTTP 409. Las respuestas son
+`application/pdf` y usan nombres de archivo fijos.
+
+Los informes se generan con datos del análisis y de sus registros fuente.
+Explican el alcance parcial y no convierten hallazgos observados en incidentes
+confirmados ni generan scores, severidades o cadenas no evaluados.
+
+## Reglas y clasificación IP
+
+El pipeline contiene implementaciones deterministas de R01–R13 conforme a los
+criterios ratificados disponibles. Cada resultado indica el estado de
+ejecución y las observaciones incluyen evidencia enlazada a `Log_ID`. Las
+reglas con condiciones pendientes o cobertura parcial no se presentan como
+completamente evaluadas.
+
+Los cuatro snapshots XML IANA están incorporados en `data/iana/`. El
+`manifest.json` registra URL, fecha `updated`, formato, fecha de recuperación y
+SHA-256 de cada archivo. El cargador verifica metadatos, contenido XML y hashes;
+si un snapshot falta o no coincide, marca el conjunto `declared_unverified` y
+aplica un comportamiento conservador sin consumir prefijos IANA no verificados.
+Los rangos RFC 5737 se clasifican como `documentation`, no como IP públicas
+operativas.
+
+## Límites de `analysis-partial/1`
+
+- Una respuesta HTTP 200 indica que se produjo un resultado **parcial**; no
+  significa que todas las reglas hayan sido ejecutadas ni que exista un
   incidente confirmado.
-- `completeness` informa filas vistas/evaluadas y conteos de reglas ejecutadas,
-  parciales, pendientes o no evaluables.
-- `rule_execution` ofrece estado, filas dentro del alcance por Event_ID,
-  registros evaluados, coincidencias y motivo para cada regla.
-- `observations` son coincidencias deterministas trazadas a `Log_ID`.
-  `impact_demonstrated` e `incident_attribution` permanecen en `false`;
-  severidad solo aparece cuando está ratificada.
+- `completeness` y `rule_execution` describen registros vistos/evaluados y el
+  alcance de cada regla. Cero coincidencias solo significa que no coincidieron
+  los predicados implementados; no demuestra ausencia de actividad.
+- Las observaciones deterministas conservan evidencia de origen. No se infieren
+  causalidad, éxito de comandos, impacto, exfiltración ni atribución.
 - `score_1e4`, `confidence_basis_points` y `level` nulos significan no
-  evaluables en el contrato parcial, no cero.
-- `analysis_id` y `content_sha256` son nulos hasta poder implementar y verificar
-  íntegramente `cj/1`. `file_sha256` sí es el hash de los bytes cargados.
-- Cero observaciones significa que no hubo coincidencias en las condiciones
-  implementadas; **no** significa que no hubiera actividad.
+  evaluables, no cero. No se asigna score operativo cuando E/K no son
+  evaluables; severidades no ratificadas permanecen sin definir.
+- Las chains C1–C6 no se materializan porque faltan condiciones reproducibles
+  de membresía y enlace. C2 conserva `pending_reconciliation`; C7 no está
+  ratificada y no se activa. Ninguna se presenta como incidente confirmado.
+- Los timestamps naive se conservan con `timezone_status="undefined"`.
+  `analysis_id` y `content_sha256` siguen no evaluables hasta disponer de los
+  vectores y la serialización completos de `cj/1`; `file_sha256` sí identifica
+  los bytes recibidos.
+- No hay base de datos, historial ni almacenamiento persistente de análisis;
+  tampoco se integra IA/Ollama ni respuesta automática.
 
-R02, R03, R04, R05, R10 y R12 se ejecutan con condiciones puntuales
-documentadas. R06 y R11 solo evalúan coincidencias puntuales, sin afirmar
-agrupación/periodicidad. R01, R07, R08, R09 y R13 están pendientes por
-definiciones de ventanas/correlación. C1–C6 no se emiten porque falta la
-membresía exacta de chains; C2 conserva `pending_reconciliation`.
+## Pruebas y verificaciones
 
-La clasificación de IP es provisional: los bloques RFC 5737 se etiquetan
-`documentation`, no IP pública operativa. Aún no se han incorporado los cuatro
-snapshots XML IANA aprobados. No se asignan scores o confidence sin catálogos
-E/K evaluables, ni se afirma canonicalización completa.
-
-## Pruebas
+Backend, desde la raíz:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -114,27 +147,30 @@ E/K evaluables, ni se afirma canonicalización completa.
 git diff --check
 ```
 
-Para validar además el workbook original, sin copiarlo al repositorio:
+Para incluir el workbook original en las pruebas, sin copiarlo al repositorio:
 
 ```powershell
-$env:SOC_L2_CHALLENGE_WORKBOOK = 'D:\Cursos\Soc 2- Comunidad Dojo\SOC_L2_Logs_Ampliados_Multiples_Incidentes.xlsx'
+$env:SOC_L2_CHALLENGE_WORKBOOK = (Resolve-Path '.\privado\challenge.xlsx').Path
 .\.venv\Scripts\python.exe -m pytest -q
-Remove-Item Env:SOC_L2_CHALLENGE_WORKBOOK -ErrorAction SilentlyContinue
+Remove-Item Env:SOC_L2_CHALLENGE_WORKBOOK
 ```
 
-No se deben guardar el workbook ni otros datasets del desafío en el
-repositorio.
-
-## Frontend local
-
-La interfaz React/TypeScript está en [`frontend/`](./frontend/README.md).
-Iniciá primero el backend y luego, en otra terminal PowerShell:
+Frontend, desde `frontend`:
 
 ```powershell
-Set-Location .\frontend
-npm.cmd ci
-npm.cmd run dev
+npm.cmd test
+npm.cmd run build
 ```
 
-Abrí <http://127.0.0.1:5173>. Vite redirige `/api/*` al backend local
-`http://127.0.0.1:8000/*`; no requiere cambios de CORS en FastAPI.
+El workbook del desafío no se distribuye con el repositorio. Usá únicamente un
+archivo al que tengas autorización de acceso y mantenelo fuera del control de
+versiones.
+
+## Documentación
+
+- [Evaluación del dataset](./docs/DATA_ASSESSMENT.md): perfil y limitaciones de
+  los registros del desafío.
+- [Decisiones de Fase 4](./docs/PHASE4_DECISIONS.md): metodología ratificada,
+  alcance implementado y aspectos pendientes.
+- [Frontend](./frontend/README.md): instalación, uso, endpoints y verificación
+  de la interfaz.

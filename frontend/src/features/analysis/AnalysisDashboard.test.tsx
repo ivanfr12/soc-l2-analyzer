@@ -61,4 +61,23 @@ describe("AnalysisDashboard timestamp notice", () => {
 
     expect(screen.queryByText(/Zona horaria no definida/)).not.toBeInTheDocument();
   });
+
+  it("only offers PDF downloads when the analyzed file is still associated", () => {
+    const file = new File(["workbook"], "events.xlsx");
+    const { rerender } = render(
+      <AnalysisDashboard result={makeResult("defined")} reportFile={file} />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Descargar informe ejecutivo" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Descargar informe técnico" }),
+    ).toBeInTheDocument();
+
+    rerender(<AnalysisDashboard result={makeResult("defined")} reportFile={null} />);
+    expect(
+      screen.queryByRole("button", { name: /Descargar informe/ }),
+    ).not.toBeInTheDocument();
+  });
 });

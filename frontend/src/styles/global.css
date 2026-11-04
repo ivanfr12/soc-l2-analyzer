@@ -1146,6 +1146,42 @@ a {
   overflow: hidden;
 }
 
+.report-downloads {
+  padding: 17px;
+}
+
+.report-downloads .panel-heading {
+  margin-bottom: 12px;
+}
+
+.report-downloads__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-downloads__action {
+  display: grid;
+  gap: 6px;
+}
+
+.report-downloads__action .button {
+  width: 100%;
+  margin-left: 0;
+}
+
+.report-downloads__error {
+  margin: 0;
+  color: #ff9aa9;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.report-downloads__success {
+  color: #8be4c4;
+  font-size: 9px;
+}
+
 .result-panel > .panel-heading {
   padding: 0 17px;
 }
@@ -1827,6 +1863,12 @@ a {
     gap: 4px;
     padding: 0 6px;
     font-size: 8px;
+  }
+
+  @media (max-width: 640px) {
+    .report-downloads__actions {
+      grid-template-columns: 1fr;
+    }
   }
 
   .contract-chip__partial {

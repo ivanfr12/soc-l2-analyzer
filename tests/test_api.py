@@ -43,7 +43,13 @@ def test_swagger_documentation_is_available() -> None:
     assert docs_response.status_code == 200
     assert "swagger-ui" in docs_response.text.casefold()
     assert openapi_response.status_code == 200
-    assert {"/health", "/meta", "/analyze"} <= set(
+    assert {
+        "/health",
+        "/meta",
+        "/analyze",
+        "/reports/executive",
+        "/reports/technical",
+    } <= set(
         openapi_response.json()["paths"]
     )
 
@@ -82,7 +88,7 @@ def test_valid_xlsx_returns_explicitly_partial_analysis() -> None:
     assert result["status"] == "partial"
     assert result["analysis_id"] is None
     assert result["completeness"]["records_seen"] == 1
-    assert result["rule_execution"]["R09"]["status"] == "pending"
+    assert result["rule_execution"]["R09"]["status"] == "executed"
     assert result["observations"] == []
 
 
@@ -200,4 +206,12 @@ def test_original_workbook_is_analyzed_through_http_endpoint() -> None:
     assert result["rule_execution"]["R03"]["matched_observation_count"] == 2
     assert result["rule_execution"]["R03"]["records_in_scope"] == 111
     assert result["rule_execution"]["R03"]["records_evaluated"] == 111
-    assert result["rule_execution"]["R09"]["records_evaluated"] == 0
+    assert result["rule_execution"]["R09"]["status"] == "executed"
+    assert result["rule_execution"]["R09"]["records_in_scope"] == 22
+    assert result["rule_execution"]["R09"]["records_evaluated"] == 22
+    assert result["rule_execution"]["R09"]["matched_observation_count"] == 1
+    assert result["rule_execution"]["R13"]["status"] == "executed"
+    assert result["rule_execution"]["R13"]["records_in_scope"] == 21
+    assert result["rule_execution"]["R13"]["records_evaluated"] == 21
+    assert result["rule_execution"]["R13"]["matched_observation_count"] == 1
+    assert result["contract"] == "analysis-partial/1"

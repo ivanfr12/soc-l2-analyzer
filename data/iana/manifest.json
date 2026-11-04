@@ -1,0 +1,53 @@
+{
+  "artifact_version": "iana-ip-table/1.0",
+  "snapshots": [
+    {
+      "registry_id": "iana-ipv4-special-registry",
+      "name": "IPv4 Special-Purpose Address Registry",
+      "url": "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xml",
+      "updated": "2025-10-09",
+      "format": "XML",
+      "retrieved_at": "2026-11-03",
+      "filename": "iana-ipv4-special-registry.xml",
+      "sha256": "37f334466c842387a8aee8d1ae7a6d5b2208ef27eb8964072538b73ee2f5b21d",
+      "record_count": 25,
+      "validation_status": "verified"
+    },
+    {
+      "registry_id": "iana-ipv6-special-registry",
+      "name": "IPv6 Special-Purpose Address Registry",
+      "url": "https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xml",
+      "updated": "2025-10-09",
+      "format": "XML",
+      "retrieved_at": "2026-11-03",
+      "filename": "iana-ipv6-special-registry.xml",
+      "sha256": "660acf0201b462b8d820605ba1cb20c4ed216acd883ee4a55a17453d73d4c3aa",
+      "record_count": 25,
+      "validation_status": "verified"
+    },
+    {
+      "registry_id": "ipv4-address-space",
+      "name": "IPv4 Address Space Registry",
+      "url": "https://www.iana.org/assignments/ipv4-address-space/ipv4-address-space.xml",
+      "updated": "2025-10-10",
+      "format": "XML",
+      "retrieved_at": "2026-11-03",
+      "filename": "ipv4-address-space.xml",
+      "sha256": "013bf87df7b24401ab6143bcad83bd61eeaf0f9c976d2cf1aedcdd5795865222",
+      "record_count": 256,
+      "validation_status": "verified"
+    },
+    {
+      "registry_id": "ipv6-address-space",
+      "name": "IPv6 Address Space Registry",
+      "url": "https://www.iana.org/assignments/ipv6-address-space/ipv6-address-space.xml",
+      "updated": "2025-10-23",
+      "format": "XML",
+      "retrieved_at": "2026-11-03",
+      "filename": "ipv6-address-space.xml",
+      "sha256": "15481d1e549b481f3bd0321c5cd2c0327a00cbd3d5a6fc35fc7b53b51e70b1cb",
+      "record_count": 20,
+      "validation_status": "verified"
+    }
+  ]
+}

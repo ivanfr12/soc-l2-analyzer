@@ -17,6 +17,7 @@ interface UploadPanelProps {
   isProcessing: boolean;
   error: UiError | null;
   onAnalyze: (file: File) => Promise<void>;
+  onFileSelected: (file: File | null) => void;
   onClearError: () => void;
 }
 
@@ -34,6 +35,7 @@ export default function UploadPanel({
   isProcessing,
   error,
   onAnalyze,
+  onFileSelected,
   onClearError,
 }: UploadPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -45,6 +47,7 @@ export default function UploadPanel({
     setFileError(null);
     onClearError();
     if (!candidate) return;
+    onFileSelected(null);
 
     if (!candidate.name.toLowerCase().endsWith(".xlsx")) {
       setFile(null);
@@ -64,6 +67,7 @@ export default function UploadPanel({
       return;
     }
     setFile(candidate);
+    onFileSelected(candidate);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -93,6 +97,7 @@ export default function UploadPanel({
           type="file"
           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           aria-label="Seleccionar archivo Excel XLSX"
+          disabled={isProcessing}
           onChange={(event) => {
             chooseFile(event.currentTarget.files?.[0]);
             event.currentTarget.value = "";
@@ -112,6 +117,7 @@ export default function UploadPanel({
           onDrop={(event) => {
             event.preventDefault();
             setIsDragging(false);
+            if (isProcessing) return;
             chooseFile(event.dataTransfer.files[0]);
           }}
         >
@@ -134,6 +140,7 @@ export default function UploadPanel({
                   setFile(null);
                   setFileError(null);
                   onClearError();
+                  onFileSelected(null);
                 }}
                 aria-label="Quitar archivo seleccionado"
                 disabled={isProcessing}

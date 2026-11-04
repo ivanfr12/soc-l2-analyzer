@@ -5,13 +5,18 @@ import type { AnalysisResult, Observation } from "../../types/analysis";
 import AnalysisSummary from "./AnalysisSummary";
 import EvidenceDetails from "./EvidenceDetails";
 import ObservationsTable from "./ObservationsTable";
+import ReportDownloads from "./ReportDownloads";
 import RuleCoverageTable from "./RuleCoverageTable";
 
 interface AnalysisDashboardProps {
   result: AnalysisResult;
+  reportFile?: File | null;
 }
 
-export default function AnalysisDashboard({ result }: AnalysisDashboardProps) {
+export default function AnalysisDashboard({
+  result,
+  reportFile = null,
+}: AnalysisDashboardProps) {
   const [selectedObservation, setSelectedObservation] =
     useState<Observation | null>(null);
 
@@ -44,6 +49,12 @@ export default function AnalysisDashboard({ result }: AnalysisDashboardProps) {
         )}
 
         <AnalysisSummary result={result} />
+        {reportFile && (
+          <ReportDownloads
+            file={reportFile}
+            expectedFileSha256={result.file_sha256}
+          />
+        )}
 
         <section className="panel result-panel">
           <div className="panel-heading panel-heading--row">

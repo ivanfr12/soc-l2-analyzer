@@ -23,6 +23,13 @@ export class ApiError extends Error {
   }
 }
 
+export interface ReportDownload {
+  blob: Blob;
+  filename: string;
+}
+
+export type ReportType = "executive" | "technical";
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -239,4 +246,124 @@ export async function analyzeFile(file: File): Promise<AnalysisResult> {
     );
   }
   return payload;
+}
+
+function reportFilename(
+  contentDisposition: string | null,
+  reportType: ReportType,
+): string {
+  const fallback =
+    reportType === "executive"
+      ? "SOC_L2_Informe_Ejecutivo.pdf"
+      : "SOC_L2_Informe_Tecnico.pdf";
+  if (!contentDisposition) return fallback;
+
+  const encoded = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = contentDisposition.match(/filename="?([^";]+)"?/i)?.[1];
+  let candidate = encoded ? decodeFilename(encoded) : plain;
+  if (
+    !candidate ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*\.pdf$/i.test(candidate) ||
+    candidate.includes("..")
+  ) {
+    return fallback;
+  }
+  return candidate;
+}
+
+function decodeFilename(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+async function reportError(response: Response): Promise<ApiError> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return new ApiError(
+      "La API rechazó la solicitud de informe.",
+      response.status,
+      null,
+      "http",
+    );
+  }
+
+  const detail = isRecord(payload) ? payload.detail : null;
+  const message =
+    isRecord(detail) && typeof detail.message === "string"
+      ? detail.message
+      : "La API rechazó la solicitud de informe.";
+  const code =
+    isRecord(detail) && typeof detail.code === "string" ? detail.code : null;
+  return new ApiError(message, response.status, code, "http");
+}
+
+async function requestReport(
+  reportType: ReportType,
+  file: File,
+  expectedFileSha256: string,
+  signal?: AbortSignal,
+): Promise<ReportDownload> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("expected_file_sha256", expectedFileSha256);
+
+  let response: Response;
+  try {
+    response = await fetch(`/api/reports/${reportType}`, {
+      method: "POST",
+      body: formData,
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new ApiError(
+      "No se pudo conectar con la API para generar el informe.",
+      null,
+      null,
+      "network",
+    );
+  }
+
+  if (!response.ok) throw await reportError(response);
+  if (
+    !response.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .includes("application/pdf")
+  ) {
+    throw new ApiError("La API no devolvió un documento PDF válido.");
+  }
+
+  const blob = await response.blob();
+  if (blob.size < 5 || (await blob.slice(0, 5).text()) !== "%PDF-") {
+    throw new ApiError("La API devolvió un contenido que no es un PDF válido.");
+  }
+  return {
+    blob,
+    filename: reportFilename(
+      response.headers.get("content-disposition"),
+      reportType,
+    ),
+  };
+}
+
+export function requestExecutiveReport(
+  file: File,
+  expectedFileSha256: string,
+  signal?: AbortSignal,
+): Promise<ReportDownload> {
+  return requestReport("executive", file, expectedFileSha256, signal);
+}
+
+export function requestTechnicalReport(
+  file: File,
+  expectedFileSha256: string,
+  signal?: AbortSignal,
+): Promise<ReportDownload> {
+  return requestReport("technical", file, expectedFileSha256, signal);
 }

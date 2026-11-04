@@ -45,6 +45,8 @@ export default function App() {
   const [metadata, setMetadata] = useState<ApiMetadata | null>(null);
   const [metadataWarning, setMetadataWarning] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [resultFile, setResultFile] = useState<File | null>(null);
   const [error, setError] = useState<UiError | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -87,8 +89,11 @@ export default function App() {
     setIsProcessing(true);
     setError(null);
     setResult(null);
+    setResultFile(null);
     try {
-      setResult(await analyzeFile(file));
+      const analysis = await analyzeFile(file);
+      setResult(analysis);
+      setResultFile(file);
     } catch (caught) {
       setError(toUiError(caught));
     } finally {
@@ -149,11 +154,19 @@ export default function App() {
               isProcessing={isProcessing}
               error={error}
               onAnalyze={handleAnalyze}
+              onFileSelected={(file) => {
+                setSelectedFile(file);
+                setResult(null);
+                setResultFile(null);
+              }}
               onClearError={() => setError(null)}
             />
             {isProcessing && <LoadingState />}
             {result ? (
-              <AnalysisDashboard result={result} />
+              <AnalysisDashboard
+                result={result}
+                reportFile={resultFile === selectedFile ? resultFile : null}
+              />
             ) : (
               !isProcessing && <EmptyState onUpload={() => navigate("upload")} />
             )}

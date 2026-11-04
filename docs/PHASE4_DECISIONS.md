@@ -1,15 +1,24 @@
 # Fase 4 — decisiones ratificadas y estado de implementación
 
 **Versión:** 1.0
-**Estado:** decisiones consolidadas; implementación I0–I6 en curso.
+**Estado:** decisiones consolidadas. Este documento distingue las decisiones
+ratificadas del estado actual de implementación y de los aspectos pendientes.
 
 Esta nota registra las decisiones provistas para Fase 4. La evaluación local
-del dataset se conserva fuera de este commit y no se modifica.
+del dataset se conserva por separado y no se modifica aquí. Dashboard y PDF no
+formaban parte del alcance de implementación original I0–I6; actualmente están
+integrados como capas de presentación y exportación del MVP. Su implementación
+no cambia las reglas ni el contrato parcial descritos en esta nota.
 
 ## Alcance y contrato
 
-- Fase 4 comprende I0–I6. Dashboard y PDF quedan fuera de alcance.
-- API sin persistencia: `GET /health`, `GET /meta`, `POST /analyze`.
+- Decisión ratificada: Fase 4 comprende I0–I6; el contrato inicial de API
+  contempla `GET /health`, `GET /meta` y `POST /analyze`, sin persistencia.
+- Implementación actual del producto: además de esos endpoints, el backend
+  expone `POST /reports/executive` y `POST /reports/technical`; el frontend
+  presenta el dashboard y las acciones para descargar ambos PDF.
+- Los informes PDF vuelven a analizar el archivo recibido, exigen el SHA-256
+  esperado y no conservan el workbook ni el informe generado.
 - `analysis_id` es content-addressed, no una clave de almacenamiento.
 - `AnalysisResult` usa `schema_version="1.0"` y `canon_version="cj/1"`.
 - Timestamps naive conservan `timezone_status="undefined"`.
@@ -17,6 +26,8 @@ del dataset se conserva fuera de este commit y no se modifica.
 - La carga está limitada a 10 MiB y valida firma ZIP y lectura con OpenPyXL.
 - Los mensajes se presentan en español y conservan los nombres técnicos.
 - P-4: la detección de contradicciones está diferida y no bloquea esta fase.
+- Pendiente: faltan los vectores y la serialización aprobados para verificar
+  completamente `cj/1`; tampoco se completan E/K ni se materializan chains.
 
 ## Canonicalización y hashes (`cj/1`)
 
@@ -130,15 +141,164 @@ automáticamente de confidence.
 Las condiciones documentadas de R01–R13 se resumen en este diagnóstico. No se
 amplían ni se convierten hipótesis del dataset en hechos.
 
+### R09/1.0 — Transferencia saliente volumétrica
+
+Estado: decisiones metodológicas ratificadas e implementación temporal
+integrada en el pipeline. La implementación fue verificada mediante pruebas
+unitarias, de integración y con el workbook original. Esta sección es la fuente
+de verdad para R09/1.0.
+
+1. **Ventana:** deslizante de 15 minutos.
+2. **Anclaje:** cada evento `PROXY_ACCESS` elegible es ancla y extremo derecho
+   de la ventana.
+3. **Límites:** para un ancla en `t`, se evalúa `(t - 15 minutos, t]`; el límite
+   izquierdo es exclusivo y el derecho inclusivo.
+4. **Cantidad:** contar eventos únicos por `Log_ID`.
+5. **Bytes:** sumar solo valores válidos y no negativos. Los registros sin un
+   valor válido no aportan bytes.
+6. **Duplicados e identidad:** el mismo `Log_ID` con contenido idéntico cuenta
+   una sola vez. Si el mismo `Log_ID` está asociado a contenidos diferentes,
+   excluir de R09 todas sus versiones en conflicto; no seleccionar una versión.
+7. **Claves incompletas:** excluir del agrupamiento los registros cuyo
+   `Hostname`, `User` o `Destination` esté ausente o sea inválido.
+8. **Solapamiento:** consolidar todas las ventanas calificadas de una misma
+   clave en una observación, con la unión de todas las evidencias contribuyentes.
+
+La fuente es `PROXY_ACCESS`; la clave es `(Hostname, User, Destination)`.
+Cada ventana califica si `count >= 10 OR observed_bytes_out_sum >= 52,428,800`;
+ambos umbrales son inclusivos. Para una detección que califique únicamente por
+bytes, `severity_eligible=false`.
+
+Los valores de bytes son observaciones neutrales: no demuestran exfiltración,
+transferencia exitosa, impacto ni intención maliciosa.
+
+### R07/1.0 — Lectura masiva de archivos en un share
+
+Estado: criterios metodológicos ratificados e implementación integrada en el
+pipeline. R07 solo observa eventos `Event_ID=4663` y no usa `Log_Source` para
+seleccionarlos. La clave exacta es `(User, Hostname, Destination)`; sus tres
+componentes deben ser texto presente y no vacío ni compuesto solo por espacios.
+Se preservan literalmente, sin normalización.
+
+Cada evento elegible puede anclar una ventana deslizante de 10 minutos,
+`(t - 10 minutos, t]`. Se cuentan valores distintos de `Process_CommandLine`
+por igualdad literal exacta: sin trim, cambio de mayúsculas/minúsculas ni otra
+normalización. Valores nulos, vacíos o solo con espacios no cuentan. La ventana
+califica con al menos 10 valores distintos.
+
+Se deduplican registros con `Log_ID` y contenido completo idéntico. Si un
+`Log_ID` tiene contenido diferente, se excluyen todas sus versiones de R07.
+Las ventanas calificadas de una misma clave se consolidan en una observación;
+su evidencia es la unión sin duplicados de los registros de esas ventanas,
+ordenada por timestamp y `Log_ID`. Timestamps inválidos y claves incompletas
+se excluyen de la evaluación. Solo se evalúan los registros disponibles; no se
+infiere cobertura completa ni actividad fuera del workbook. El campo
+`Process_CommandLine` puede describir accesos a archivos y no demuestra
+ejecución de comandos, exfiltración ni impacto.
+
+### R08/1.0 — Archivado y asociación contextual
+
+Estado: decisiones metodológicas ratificadas e implementación integrada en el
+pipeline. Solo se evalúan eventos `Event_ID=4688`. Las herramientas reconocidas
+son los tokens ejecutables/cmdlet `7z.exe`/`7z`, `rar.exe`/`rar`, `tar.exe`/`tar`
+y `Compress-Archive`; no se aceptan coincidencias dentro de otros tokens.
+El parser reconoce `7z`/`rar` con operación `a` y la ruta de archivo como
+primer argumento posterior, `tar` en modo creación `-c` con salida indicada
+por `-f`/`--file`, y `Compress-Archive` con `-DestinationPath`. Sintaxis
+ambigua o no admitida no califica.
+
+La ruta de salida se clasifica como `local_staging` para `C:\Temp`, `%TEMP%` o
+`C:\Users\Public`, y como `network_destination` para una ruta UNC inequívoca.
+No se expande `%TEMP%`; no se infiere una ruta ausente; las carpetas locales,
+incluida `C:\Users\Public`, no se presentan como destinos públicos de Internet.
+No se interpreta una IP de documentación como conectividad pública real.
+
+El evento R08 es el ancla: solo evidencias pertenecientes a observaciones R07
+y/o R09 efectivamente calificadas se relacionan si su timestamp cae en
+`[t_R08 - 15 minutos, t_R08 + 15 minutos]` y coinciden exactamente `Hostname`
+y `User` (sin normalización). R07 OR R09 es suficiente; si califican ambas,
+se conservan ambas relaciones. Se emite una observación por evento R08; se
+unen las evidencias relacionadas sin duplicar `Log_ID`, ordenadas por timestamp
+y `Log_ID`. La asociación no implica causalidad.
+
+Los `Log_ID` con contenido completo idéntico se deduplican; si hay contenido
+distinto, se excluyen todas sus versiones, también ante conflictos con otros
+`Event_ID`. Se excluyen eventos con timestamp/identidad inválidos, comando no
+textual o salida no identificable, y evidencias relacionadas sin timestamp o
+identidad válidos. Solo se analizan registros disponibles; no se infiere
+transferencia exitosa, exfiltración, impacto ni intención.
+
+R08 no tiene cap de nivel ni de confidence. El score `.7500` es una referencia
+histórica/metodológica, no un valor forzado; score y confidence permanecen
+nulos mientras E/K no sean evaluables. No se asigna severidad, que sigue sin
+política ratificada.
+
+### R13/1.0 — Enumeración web automatizada
+
+Estado: criterios ratificados e implementación integrada en el pipeline. R13
+selecciona exclusivamente `Event_ID=HTTP_ACCESS` y agrupa por `Source_IP`.
+Cada solicitud elegible puede ser ancla de una ventana deslizante de cinco
+minutos `(t - 5 minutos, t]`; el límite izquierdo es exclusivo y el derecho
+inclusivo. Timestamps iguales se procesan juntos. Se consolidan las ventanas
+calificadas de una misma IP en una observación.
+
+Una ventana califica cuando `request_count >= 10` y, además,
+`error_rate >= 30%` o `sensitive_route_count >= 1`. El `error_rate` es
+`error_count / valid_result_count`: se consideran errores los códigos HTTP
+400–599 y el denominador incluye únicamente códigos HTTP válidos 100–599.
+Se acepta un entero no booleano en ese rango o texto de tres dígitos ASCII con
+espacios ASCII externos. Resultados ausentes, vacíos, inválidos o fuera de
+rango no eliminan la solicitud de `request_count` y no participan en el
+numerador ni denominador. Si `valid_result_count=0`, la tasa no es calculable;
+la condición de ruta sensible se evalúa de forma independiente. El umbral de
+tasa se evalúa con enteros: `error_count * 100 >= valid_result_count * 30`.
+
+Las rutas sensibles son `/admin`, `/login`, `/api` y `/upload`. Solo se aceptan
+URI origin-form que comienzan con `/`; query y fragmento no participan en la
+comparación. Se rechazan controles, backslash y escapes percent-encoded
+malformados. Se decodifican una sola vez caracteres percent-encoded no
+reservados; `%2F` y `%5C` no se convierten en separadores. Los segmentos
+ASCII se comparan sin distinguir mayúsculas; segmentos vacíos por barras
+repetidas o finales se ignoran. Solo cuentan segmentos exactos; por ejemplo,
+`/administrator`, `/apiary`, `/login2`, `/upload-test` y `/uploads` no
+coinciden. Una URI inválida o ausente no aporta ruta sensible, pero la
+solicitud todavía puede contar.
+
+`Log_ID` debe ser texto no vacío ni compuesto solo por espacios. Filas
+idénticas con el mismo ID se cuentan una vez; si un ID tiene contenido
+conflictivo, se excluyen todas sus versiones, incluso cuando el conflicto
+incluye otro `Event_ID`. La firma considera el registro completo y preserva
+tipos y valores. IP ausente o sintácticamente inválida y timestamps ausentes o
+inválidos se excluyen de la evaluación temporal. Se incluyen IP válidas de
+cualquier categoría (`public`, `private`, `special`, `documentation`,
+`unknown`); se conserva su clasificación y las IPv4-mapped IPv6 mantienen su
+identidad de grupo IPv6 sin mezclarse automáticamente con IPv4. `Hostname` y
+`User` no son requisitos de elegibilidad.
+
+La evidencia consolidada es la unión única de `Log_ID` que pertenecen a al
+menos una ventana calificante, ordenada por timestamp y luego `Log_ID`. La
+descripción de la observación muestra las métricas de la primera ventana
+calificante en orden temporal; no son métricas agregadas sobre la unión.
+El contrato `analysis-partial/1` no agrega campos. R13 no consulta ni se
+correlaciona con R12. La regla observa solicitudes y no confirma
+automatización, intención maliciosa, éxito, impacto o atribución. No se infiere
+actividad antes o después de los registros disponibles.
+
+R13 tiene nivel máximo L1 y cap de score 0.7500, aplicado como
+`min(score_1e4, 7500)` únicamente si el score es evaluable. El cap de
+confidence es una decisión separada; con E/K no evaluables ambos valores
+operativos permanecen nulos. La severidad continúa sin ratificar y no se
+asigna.
+
 Decisiones específicas:
 
 - R03 puede reportar `documentation` y `public` como observaciones; excluye
   `private` y `special`. `unknown`, `missing` e `invalid` no satisfacen la
   condición. RFC5737 es documentación, no evidencia de conexión pública
   operativa ni atribución.
-- R09 agrupa `(Hostname, User, Destination)` en ventana de 15 minutos y
-  dispara si `count >= 10 OR observed_bytes_out_sum >= 52428800`. Ambos
-  umbrales son inclusivos.
+- R09/1.0 tiene ratificadas la clave, la semántica temporal, el conteo por
+  `Log_ID`, el tratamiento de bytes y duplicados, la exclusión de claves
+  incompletas y la consolidación de ventanas, según la especificación que sigue.
 - R09 requiere pruebas count-only, volume-only, below-threshold y
   inclusive-boundary. `bytes_out` es una observación neutral; por sí solo no
   demuestra impacto y `severity_eligible=false`.
@@ -163,12 +323,26 @@ No se inventan condiciones de membership para C1–C6 cuando no estén descritas
 
 ## Fuentes IANA para clasificación IP
 
-Las cuatro fuentes XML deben preservarse con URL, fecha `updated`, formato,
-fecha de recuperación y SHA-256 calculado sobre bytes reales. Snapshots de
-registros especiales: `2025-10-09`; de asignación: `2025-10-10`. Las filas
-NAT64/DNS64 `192.0.0.170/32` y `192.0.0.171/32` pertenecen a una entrada IANA.
-Las asignaciones de `ip_table v1` permanecen `declared_unverified` hasta
-validar la fuente. No se registran hashes ficticios.
+Decisión ratificada: preservar las cuatro fuentes XML con URL, fecha `updated`,
+formato, fecha de recuperación y SHA-256 calculado sobre bytes reales. La
+implementación actual conserva los archivos en `data/iana/` y sus metadatos en
+`data/iana/manifest.json`; el cargador comprueba identidad de la fuente, fecha,
+estructura XML y SHA-256 antes de utilizarlos. Los valores declarados a
+continuación corresponden al manifiesto incorporado; no son hashes inferidos.
+
+| Registro | URL | `updated` | Formato | Recuperado | Archivo relativo | SHA-256 |
+|---|---|---|---|---|---|---|
+| `iana-ipv4-special-registry` | `https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xml` | `2025-10-09` | XML | `2026-11-03` | `data/iana/iana-ipv4-special-registry.xml` | `37f334466c842387a8aee8d1ae7a6d5b2208ef27eb8964072538b73ee2f5b21d` |
+| `iana-ipv6-special-registry` | `https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xml` | `2025-10-09` | XML | `2026-11-03` | `data/iana/iana-ipv6-special-registry.xml` | `660acf0201b462b8d820605ba1cb20c4ed216acd883ee4a55a17453d73d4c3aa` |
+| `ipv4-address-space` | `https://www.iana.org/assignments/ipv4-address-space/ipv4-address-space.xml` | `2025-10-10` | XML | `2026-11-03` | `data/iana/ipv4-address-space.xml` | `013bf87df7b24401ab6143bcad83bd61eeaf0f9c976d2cf1aedcdd5795865222` |
+| `ipv6-address-space` | `https://www.iana.org/assignments/ipv6-address-space/ipv6-address-space.xml` | `2025-10-23` | XML | `2026-11-03` | `data/iana/ipv6-address-space.xml` | `15481d1e549b481f3bd0321c5cd2c0327a00cbd3d5a6fc35fc7b53b51e70b1cb` |
+
+Las filas NAT64/DNS64 `192.0.0.170/32` y `192.0.0.171/32` pertenecen a una
+entrada IANA. Con los snapshots presentes y verificados, la clasificación
+indica `verified`; si faltan archivos o no coinciden con el manifiesto, se
+degrada a `declared_unverified` y la lógica no consume prefijos IANA no
+verificados. RFC 5737 se clasifica como `documentation`, nunca como IP pública
+operativa.
 
 ## Diagnóstico por componente
 
@@ -179,25 +353,24 @@ validar la fuente. No se registran hashes ficticios.
 | Catálogo E | Estados `supported`/`unsupported`/`not_evaluable`, mismo peso, catálogo vacío `pending`, score solo cuando todas son evaluables. | Catálogo versionado de afirmaciones materiales e IDs por regla/chain y sus criterios de evaluación. | Función genérica de agregación E; no se asigna E a observaciones reales. |
 | Controles K1–K5 | Cinco controles fijos, estados, denominador 5, diferencia rules/chains, propósito de K4 y admisión de fixtures en K5. | Criterios de aprobación/fallo/no evaluable de cada K para cada regla y chain. | Función genérica de agregación K; K operativo de resultados reales sigue nulo. |
 | Dominios y aspectos | Valores C ratificados por cantidad de dominios/aspectos; criterios de L2–L4 y límites de independencia para C4/C6. | Asignación concreta de cada evidencia y objeto a dominio/aspecto y registro de independencia. | Fórmula C genérica; C por observación/chain no se imputa. |
-| R01 | `4625`, grupo por `Source_IP`, `count>=5`, `distinct(User)>=3`, ventana 10 min. | Anclaje/alineación de ventanas y superposición. | Condición conocida; ejecución pendiente, no se inventa una política de ventana. |
+| R01 | `4625`, grupo por `Source_IP`, `count>=5`, `distinct(User)>=3`, ventana 10 min. | No se materializan chains ni se infiere relación con otras reglas. | Integrada en el pipeline con su evaluación temporal documentada y observaciones trazables; no equivale a una chain. |
 | R02 | Mismo `(User, Hostname)`, al menos 3 `4625` seguidos por `4624` dentro de 15 min. | Sin carencia bloqueante para evaluación direccional anclada en el `4624`. | Sí; ejecutada con referencias a fallos y éxito. |
-| R03 | `4624` y origen fuera de rangos privados; tratamiento de documentación/public/special ratificado. | Snapshots XML IANA para validar y versionar la tabla completa. | Sí, con clasificador provisional; RFC5737 se devuelve como `documentation`, nunca como público operativo. |
-| R04 | `4624`, `LogonType=10` en descripción y origen externo. | Validación de IP depende de la tabla provisional; severidad ratificada no está definida para R04. | Sí, como observación; severidad queda `not_defined`. |
+| R03 | `4624` y clasificación de origen con tratamiento de `documentation`/`public`/`special` ratificado. | No hay evidencia en los logs de que una IP RFC 5737 represente una conexión pública operativa. | Integrada con el clasificador basado en snapshots IANA verificados; RFC 5737 se devuelve como `documentation`, nunca como público operativo. |
+| R04 | `4624`, `LogonType=10` en descripción y origen externo. | La severidad ratificada no está definida para R04. | Sí, como observación; severidad queda `not_defined`. |
 | R05 | `4688` y `-EncodedCommand`, `-enc `, `-NoProfile` o `FromBase64String`. | No hay carencia para la condición puntual; severidad no está ratificada. | Sí, como observación sin afirmar que el payload sea malicioso. |
-| R06 | Eventos `4688`/`4104`, comandos enumerados, agrupación por usuario/host en 10 min. | Alineación de la ventana y criterio operacional para consolidar eventos. | Parcial: se reporta el predicado por registro; no se agrupan eventos ni se afirma actividad sostenida. |
-| R07 | `4663`, clave `(User, Hostname, Destination)`, al menos 10 comandos distintos en 10 min. | Alineación/superposición de ventana; el campo tiene la convención específica descrita en la evaluación. | Condición conocida; ejecución pendiente. |
-| R08 | Herramientas de archivado y rutas temporales/públicas; contexto ±15 min de R07/R09; sin tope L. | Membership temporal depende de R07/R09 y no debe inferir acceso o exfiltración. | Condición puntual candidata definida; asociación completa pendiente. |
-| R09 | Clave `(Hostname, User, Destination)`, ventana de 15 min, `count>=10 OR observed_bytes_out_sum>=52428800`; inclusivo y severidad no elegible por bytes. | No hay definición de ventana deslizante/fija, anclaje ni superposición. | Parser y umbrales puros implementados; el detector temporal queda pendiente y no se ejecuta. |
+| R06 | Eventos `4688`/`4104` y detección puntual de los comandos catalogados; no se infiere éxito ni intención. | Ninguna para el predicado puntual; la mención de 10 min no está ratificada y no se aplica. | Sí; predicado léxico puntual con evidencia por `Log_ID`, sin agrupación temporal. |
+| R07/1.0 | `4663`, clave exacta `(User, Hostname, Destination)`, 10 valores literales distintos de `Process_CommandLine` en ventana deslizante `(t-10 min,t]`; tratamiento explícito de duplicados, conflictos, claves inválidas y consolidación. | Ninguna para los criterios R07/1.0 ratificados. | Integrada en el pipeline; estado `executed`. La severidad sigue pendiente y no se asigna. |
+| R08/1.0 | Herramientas `7z`/`rar`/`tar`/`Compress-Archive`, salida local de staging o UNC, relación OR con findings calificados R07/R09 dentro de ±15 min inclusivos y Hostname/User exactos; duplicados/conflictos y consolidación ratificados. Sin cap de nivel/confidence. | Ninguna para los criterios R08/1.0 ratificados; el parser excluye sintaxis ambigua/no admitida. | Integrada en el pipeline; una observación por evento 4688 relacionado. Severidad no definida; `.7500` no se fuerza como score. |
+| R09/1.0 | Ventana deslizante de 15 min anclada en cada evento con `Event_ID=PROXY_ACCESS`; `(t-15 min,t]`; eventos únicos por `Log_ID`; valores válidos/no negativos; exclusión de conflictos y claves incompletas; consolidación por clave. Umbrales inclusivos `count>=10 OR observed_bytes_out_sum>=52,428,800`; `severity_eligible=false` si solo califica por bytes. | Ninguna de las ocho decisiones de R09/1.0 queda pendiente. | Integrada en el pipeline; estado `executed`. Registra exclusiones/deduplicaciones en `rule_execution.R09.reason` cuando corresponda y produce observaciones consolidadas con evidencias `Log_ID`. |
 | R10 | Condiciones textuales explícitas para `vssadmin`, `wmic` o `bcdedit`, `4688`. | Ninguna para la detección de comando; no hay evidencia de éxito del comando. | Sí, como observación de ejecución, no de efecto. |
-| R11 | `4698` o `7045`, rutas enumeradas; grupo por usuario/host en 30 min y ejemplos de ejecuciones periódicas. Severidad Medium ratificada. | Correlación/periodicidad completa requiere agrupación temporal; el nombre del archivo no demuestra persistencia maliciosa. | Parcial: reporta coincidencias puntuales con rutas, sin afirmar periodicidad ni persistencia confirmada. |
+| R11 | `4698` o `7045` con una ruta catalogada en el mismo registro; severidad Medium ratificada. | La agrupación por usuario/host en 30 min y la periodicidad aparecen como propuestas documentadas, no como criterios ratificados. | Sí; coincidencia puntual por registro, sin agrupación ni periodicidad y sin afirmar persistencia confirmada. |
 | R12 | `4688`, identidad `IIS APPPOOL\` o padre `w3wp.exe`, y comando listado. | Ninguna para el predicado puntual; severidad pendiente. | Sí, como observación compuesta de un registro. |
-| R13 | `HTTP_ACCESS`, al menos 10 en 5 min, condición de 30% 4xx/5xx o rutas sensibles. | Alineación/superposición temporal no definida. | Condición conocida; ejecución pendiente. |
-| C1–C6 | Hay ventanas temporales observadas e hipótesis en la evaluación local; niveles ratificados para C1–C6 y C2 `pending_reconciliation`. C7 está definido como candidato no ratificado. | Condiciones exactas de membership y enlaces admisibles no están formalizadas para construir chains reproducibles. | No se emiten chains. C2 no se calcula; C7 no se activa. |
-| Ventanas R09 | 15 min, grupo por las tres claves, dos umbrales inclusivos y OR están ratificados. | Estrategia de ventanas (alineación, anclaje y superposición). | No; solo parsing/suma de valores y comparador aislado. |
-| Clasificación IP | Categorías y reglas P-3; redes RFC5737 documentadas en la evaluación. | Payloads/URL de snapshots, fechas `updated` y hashes reales para reproducir `ip_table v1`. | Parcial/provisional con rangos RFC explícitos y `ipaddress`; no se presenta como validación IANA. |
+| R13/1.0 | `HTTP_ACCESS`, por `Source_IP`, ventana deslizante `(t-5 min,t]`, mínimo 10 solicitudes y `error_rate>=30%` o al menos una ruta sensible por segmento exacto. Manejo de resultados inválidos, deduplicación, conflictos, URI e IP está especificado en su sección. | Severidad pendiente; score/confidence operativos no evaluables sin catálogos E/K. | Integrada; una observación consolidada por IP y evidencias trazables. Sin correlación R12 ni afirmación de automatización maliciosa o impacto. |
+| C1–C6 | Hay niveles ratificados y C2 conserva `pending_reconciliation`; C7 es candidato no ratificado. | Las condiciones exactas de membresía y enlaces admisibles no están formalizadas para construir chains reproducibles. | No se materializan chains. C1/C3–C6 quedan `not_evaluable`; C2 queda `pending_reconciliation`; C7 queda no ratificada y no evaluable. Ninguno se presenta como incidente confirmado. |
+| Clasificación IP | Categorías y reglas P-3; cuatro snapshots XML IANA y manifiesto presentes en `data/iana/`. | La clasificación no demuestra reputación, actividad maliciosa ni conectividad operativa. | Clasificador integrado con hashes y metadatos verificados contra el manifiesto; si la validación falla, estado `declared_unverified` y uso conservador. |
 | Severidades | Valores exactos R03, R11, C1–C6 y política especial de C2 ratificados. | Severidad de R01, R02, R04–R10, R12 y R13 sigue pendiente. | Solo se asigna a observaciones R03/R11; demás severidades nulas/no definidas. |
 | M01–M14 | Ningún desglose de esos módulos está en los documentos de proyecto. | Nombres, responsabilidades, interfaces y relaciones M01–M14. | No puede afirmarse una implementación alineada a M01–M14; el pipeline actual se limita al alcance verificable. |
-| I0–I6 | Alcance de Fase 4, endpoints, upload, ingestión, reglas/scoring determinista y exclusión de dashboard/PDF están ratificados. | Criterios de aceptación y correspondencia módulo por módulo con M01–M14. | Parcial por componentes definidos; no se declara Fase 4 completa. |
+| I0–I6 | Alcance de Fase 4, endpoints, upload, ingestión y evaluación determinista están ratificados. El dashboard y los PDF quedaron fuera del alcance original de I0–I6. | La correspondencia completa módulo por módulo con M01–M14 no está especificada. | El backend parcial y las capas actuales de dashboard/PDF están implementados. Esto no completa E/K, `cj/1` ni las chains, ni implica que toda Fase 4 esté certificada como completa. |
 
 Las referencias de score, confidence y topes no se sustituyen por ajustes
 forzados: si E/K/C no se pueden evaluar con sus catálogos, el score permanece
@@ -217,28 +390,56 @@ El contrato no se denomina `AnalysisResult` definitivo y contiene:
   Event_ID, usuario e IP/clasificación.
 - `impact_demonstrated=false` e `incident_attribution=false`; severidad solo
   cuando está ratificada, y score/confidence nulos si E/K no son evaluables.
-- `analysis_id` y `content_sha256` nulos/no evaluables hasta implementar
+- `analysis_id` y `content_sha256` nulos/no evaluables hasta verificar
   `cj/1` con sus vectores y serialización aprobados; sí devuelve SHA-256 de los
   bytes originales.
 - `activity_summary` distingue cero coincidencias de regla de cero actividad.
 
 ## Estado comprobable en este repositorio
 
-- Implementados: `GET /health`, `GET /meta`, carga XLSX de solo lectura,
-  validación de hoja/columnas y rechazo de archivos vacíos, corruptos, no XLSX
-  y superiores a 10 MiB.
+- Implementados: `GET /health`, `GET /meta`, `POST /analyze`, carga XLSX de
+  solo lectura, validación de hoja/columnas y rechazo de archivos vacíos,
+  corruptos, no XLSX y superiores a 10 MiB.
+- Implementados: `POST /reports/executive` y `POST /reports/technical`, con
+  validación de `expected_file_sha256`; frontend React/TypeScript con carga,
+  dashboard y descargas asociadas al archivo del análisis visible. La descarga
+  en curso se cancela al desmontar el análisis asociado.
 - Implementados: ingestión/normalización para las columnas SIEM, timestamps
   naive y evaluación parcial explícita de filas inválidas.
-- Reglas ejecutadas en el predicado disponible: R02, R03, R04, R05, R10 y R12.
-  R06 y R11 reportan coincidencias puntuales como `partially_executed`; no
-  infieren agrupación/periodicidad. R01, R07–R09 y R13 quedan pendientes por
-  ventanas/correlaciones.
-- Implementados: clasificadores de rangos privados/documentación/special y
-  global `public` mediante `ipaddress`; clasificación marcada provisional
-  hasta incorporar los snapshots IANA.
+- Reglas implementadas en los predicados disponibles: R01–R13, con estado y
+  alcance por regla expuestos en `rule_execution`. R06 reporta coincidencias
+  puntuales sin inferir éxito o intención; R07 evalúa ventanas deslizantes
+  R07/1.0 por
+  `Event_ID=4663`; R09 evalúa ventanas deslizantes R09/1.0 por
+  `Event_ID=PROXY_ACCESS`; R08 correlaciona eventos 4688 elegibles con
+  evidencia calificada de R07 o R09; R11 evalúa rutas catalogadas por registro,
+  sin agrupación/periodicidad ni afirmación de persistencia confirmada; R13
+  evalúa ventanas deslizantes HTTP_ACCESS por Source_IP sin correlación R12.
+- Implementada: clasificación IP por snapshots IANA verificados desde
+  `data/iana/`, junto con tratamiento explícito de rangos privados,
+  documentación y especiales.
 - El motor E/K/C y los caps siguen como funciones puras; el pipeline no afirma
   un score/confidence operativo sin los catálogos evaluables.
-- R09 solo tiene parsing y comparador inclusivo aislado. No calcula ventanas.
-- `file_sha256` se comprueba contra el hash documentado del workbook original.
+- R09/1.0 está integrada: parsea el campo neutral `bytes_out` y evalúa ventanas
+  deslizantes de 15 minutos, deduplica por `Log_ID`, excluye identificadores en
+  conflicto y claves incompletas, y consolida solo evidencias contribuyentes.
+  La selección de fuente usa `Event_ID=PROXY_ACCESS`; en el workbook original,
+  `Log_Source` toma el valor `Proxy`. Los bytes observados no se interpretan
+  como transferencia exitosa, exfiltración ni impacto.
+- Los endpoints PDF comparan el hash recibido con `expected_file_sha256`; las
+  pruebas con el workbook original verifican su hash documentado.
 - `POST /analyze` devuelve resultado parcial; no crea chains ni presenta
   hipótesis como incidentes.
+- Los PDF resumen observaciones/evidencias y limitaciones del resultado
+  parcial; no materializan chains ni producen puntuaciones no evaluables.
+
+## Pendiente
+
+- Vectores aprobados y serialización completa para verificar `cj/1`;
+  `analysis_id` y `content_sha256` continúan no evaluables.
+- Catálogos evaluables E/K por regla/chain; por ello no se presentan scores ni
+  confidence operativos cuando no se pueden evaluar.
+- Condiciones reproducibles de membership/enlaces para materializar chains.
+- Correspondencia formal del pipeline con el diseño modular M01–M14.
+- No se implementan persistencia/historial, IA/Ollama, respuesta automática ni
+  detección de contradicciones.

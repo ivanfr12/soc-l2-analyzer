@@ -6,11 +6,13 @@ import UploadPanel from "./UploadPanel";
 describe("UploadPanel", () => {
   it("accepts an XLSX selection but waits for an explicit submit", () => {
     const onAnalyze = vi.fn().mockResolvedValue(undefined);
+    const onFileSelected = vi.fn();
     render(
       <UploadPanel
         isProcessing={false}
         error={null}
         onAnalyze={onAnalyze}
+        onFileSelected={onFileSelected}
         onClearError={vi.fn()}
       />,
     );
@@ -23,6 +25,7 @@ describe("UploadPanel", () => {
     });
 
     expect(screen.getByText("events.xlsx")).toBeInTheDocument();
+    expect(onFileSelected).toHaveBeenLastCalledWith(file);
     expect(onAnalyze).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Analizar workbook" }));
     expect(onAnalyze).toHaveBeenCalledWith(file);
@@ -35,6 +38,7 @@ describe("UploadPanel", () => {
         isProcessing={false}
         error={null}
         onAnalyze={onAnalyze}
+        onFileSelected={vi.fn()}
         onClearError={vi.fn()}
       />,
     );
@@ -57,6 +61,7 @@ describe("UploadPanel", () => {
         isProcessing={false}
         error={null}
         onAnalyze={vi.fn()}
+        onFileSelected={vi.fn()}
         onClearError={vi.fn()}
       />,
     );

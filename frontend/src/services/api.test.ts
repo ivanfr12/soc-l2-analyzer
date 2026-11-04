@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { analyzeFile, ApiError, getHealth, getMetadata } from "./api";
+import {
+  analyzeFile,
+  ApiError,
+  getHealth,
+  getMetadata,
+  requestExecutiveReport,
+  requestTechnicalReport,
+} from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -135,5 +142,109 @@ describe("API client", () => {
       message: "Falta la hoja SIEM Export.",
     });
     await expect(analyzeFile(file)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it.each([
+    ["executive", requestExecutiveReport, "/api/reports/executive"],
+    ["technical", requestTechnicalReport, "/api/reports/technical"],
+  ] as const)(
+    "requests the %s report with the analyzed file and expected hash",
+    async (_type, requestReport, endpoint) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response("%PDF-1.4 test", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": 'attachment; filename="safe-report.pdf"',
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const file = new File(["workbook"], "events.xlsx");
+
+      const report = await requestReport(file, "a".repeat(64));
+
+      expect(report.blob).toBeInstanceOf(Blob);
+      expect(await report.blob.slice(0, 5).text()).toBe("%PDF-");
+      expect(report.filename).toBe("safe-report.pdf");
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(endpoint);
+      expect(init.method).toBe("POST");
+      expect(init.body).toBeInstanceOf(FormData);
+      expect((init.body as FormData).get("file")).toBe(file);
+      expect((init.body as FormData).get("expected_file_sha256")).toBe(
+        "a".repeat(64),
+      );
+      expect(init.headers).toBeUndefined();
+    },
+  );
+
+  it("uses a safe fallback name for an unsafe Content-Disposition filename", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("%PDF-1.4 test", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": 'attachment; filename="../private.pdf"',
+          },
+        }),
+      ),
+    );
+
+    const report = await requestExecutiveReport(
+      new File(["workbook"], "events.xlsx"),
+      "a".repeat(64),
+    );
+
+    expect(report.filename).toBe("SOC_L2_Informe_Ejecutivo.pdf");
+  });
+
+  it("parses JSON report errors instead of treating them as PDFs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              code: "file_hash_mismatch",
+              message: "El archivo no coincide con el análisis actual.",
+            },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      requestTechnicalReport(
+        new File(["workbook"], "events.xlsx"),
+        "a".repeat(64),
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "file_hash_mismatch",
+      message: "El archivo no coincide con el análisis actual.",
+    });
+  });
+
+  it("rejects a successful HTTP response that is not a PDF", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "not a pdf" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      requestExecutiveReport(
+        new File(["workbook"], "events.xlsx"),
+        "a".repeat(64),
+      ),
+    ).rejects.toThrow("no devolvió un documento PDF");
   });
 });

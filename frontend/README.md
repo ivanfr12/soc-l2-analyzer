@@ -1,14 +1,13 @@
 # SOC L2 Analyzer — Frontend
 
-Interfaz web en React, TypeScript y Vite para consumir la API local del SOC L2
-Analyzer. Presenta respuestas reales del contrato parcial `analysis-partial/1`;
-no incluye persistencia ni historial.
+Interfaz web React + TypeScript, construida con Vite, para analizar workbooks
+Excel SIEM mediante la API FastAPI local. Muestra datos reales del contrato
+parcial `analysis-partial/1`; no guarda historial ni resultados persistentes.
 
 ## Requisitos
 
-- Node.js 22.22.2+ o 24.15+ (validado con Node.js 24.19.0).
-- npm.
-- Backend FastAPI iniciado en `http://127.0.0.1:8000`.
+- Node.js 22.22.2+ o 24.15+ y npm.
+- Backend FastAPI disponible en `http://127.0.0.1:8000`.
 
 ## Instalar y ejecutar
 
@@ -20,50 +19,78 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-Abrir <http://127.0.0.1:5173>. Vite reenvía `/api/health`, `/api/meta` y
-`/api/analyze` a FastAPI en `127.0.0.1:8000`, quitando el prefijo `/api`.
-No es necesario habilitar CORS en el backend para este flujo de desarrollo.
-
-Para iniciar ambos servicios, abrir dos terminales PowerShell:
+Abrir <http://127.0.0.1:5173>. Para ejecutar ambos servicios, iniciar primero el
+backend en una terminal desde la raíz:
 
 ```powershell
-# Terminal 1, desde la raíz del repositorio
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-```powershell
-# Terminal 2, desde la raíz del repositorio
-Set-Location .\frontend
-npm.cmd ci
-npm.cmd run dev
-```
+Luego iniciar el frontend en una segunda terminal con los comandos anteriores.
 
-## Funcionalidades
+## Carga y dashboard
 
-- Estado de conectividad consultando `/health`.
-- Lectura de `/meta` para el límite de carga y versiones declaradas.
-- Selección o arrastre de `.xlsx`, validación de extensión y tamaño, y envío
-  manual mediante `POST /analyze`.
-- Tarjetas de cobertura, tabla de estado de reglas y lista de observaciones.
-- Detalle de evidencias con referencia a `Log_ID`.
-- Estados de carga, error de red y errores de validación.
+El panel permite seleccionar o arrastrar un archivo `.xlsx`, validar en cliente
+extensión y límite de tamaño informado por la API, y enviarlo mediante
+`POST /analyze`. El dashboard presenta cobertura de reglas, observaciones y
+evidencias asociadas por `Log_ID`; no muestra la respuesta como un incidente
+confirmado. El archivo queda asociado en memoria al resultado actual para
+habilitar las descargas. Al elegir otro archivo se limpian los resultados
+anteriores; una exportación en curso se cancela cuando se desmonta el análisis
+al que pertenecía.
 
-## Verificación
+## Informes PDF
+
+Tras un análisis exitoso, se habilitan por separado **Descargar informe
+ejecutivo** y **Descargar informe técnico**. Cada acción envía al backend el
+mismo objeto `File` asociado al resultado y el `file_sha256` devuelto por la
+API. El frontend muestra estados independientes de generación, descarga y
+error, permite reintentar y no usa el nombre del archivo Excel como ruta.
+Los PDFs se generan bajo demanda y no se almacenan permanentemente.
+
+Endpoints del backend:
+
+- `POST /reports/executive`
+- `POST /reports/technical`
+
+La API compara `expected_file_sha256` con el archivo recibido; si no coincide,
+responde HTTP 409 y el frontend solicita volver a analizar el archivo.
+
+## API y proxy de desarrollo
+
+El frontend consulta:
+
+- `GET /health` — conectividad del backend.
+- `GET /meta` — versiones, hoja/columnas requeridas y máximo de carga.
+- `POST /analyze` — análisis parcial del workbook.
+- `POST /reports/executive` y `POST /reports/technical` — generación de PDF.
+
+En desarrollo, Vite reenvía todas las rutas `/api/*` a
+`http://127.0.0.1:8000/*` y elimina el prefijo `/api`. No es necesario habilitar
+CORS para este flujo local. El proxy no configura un despliegue de producción.
+
+## Pruebas y compilación
+
+Desde `frontend`:
 
 ```powershell
 npm.cmd test
 npm.cmd run build
 ```
 
+El script de build ejecuta TypeScript (`tsc --noEmit`) y luego genera el bundle
+de producción con Vite.
+
 ## Limitaciones
 
-- La respuesta es parcial: las reglas pendientes no se presentan como
-  ejecutadas y las observaciones no se tratan como incidentes confirmados.
-- Scores, niveles, confidence o severidades ausentes/null se muestran como no
-  evaluables o no disponibles.
-- La API no devuelve el listado completo de registros; el frontend solo puede
-  mostrar resumen y evidencia incluida en observaciones.
-- No hay historial, almacenamiento, autenticación, vistas de incidentes,
-  dashboards históricos ni notificaciones funcionales.
-- El proxy de Vite es para desarrollo local; la integración de despliegue no
-  está configurada en esta etapa.
+- El dashboard refleja el resultado parcial de la API; las reglas pendientes no
+  se muestran como ejecutadas y las observaciones no son incidentes
+  confirmados.
+- Score, nivel, confidence o severidad nulos/no disponibles no se reemplazan por
+  valores inferidos.
+- La API no devuelve todos los registros del workbook; la interfaz muestra
+  resumen y evidencia incluidos en el resultado.
+- No hay historial, persistencia, autenticación, gestión de incidentes,
+  dashboards históricos, notificaciones funcionales ni respuesta automática.
+- El proxy es exclusivo del servidor de desarrollo; la configuración de
+  despliegue no está incluida.
