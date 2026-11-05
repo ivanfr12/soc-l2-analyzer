@@ -83,6 +83,61 @@ export interface Observation {
   confidence_status: string;
 }
 
+export interface ChainNode {
+  rule_id: string;
+  log_ids: string[];
+  hostnames: string[];
+  users: string[];
+  source_ips: string[];
+  first_timestamp: string | null;
+  last_timestamp: string | null;
+}
+
+export interface ChainLink {
+  from_rule: string;
+  to_rule: string;
+  basis: string[];
+  delta_seconds: number;
+  window_seconds: number;
+}
+
+export interface ContextualEvidence {
+  rule_id: string;
+  log_ids: string[];
+  basis?: string[];
+  delta_seconds?: number;
+  window_seconds?: number;
+  note?: string;
+}
+
+export interface ChainDetail {
+  chain_id: string;
+  name: string;
+  status: string;
+  ratified: boolean;
+  reason: string;
+  semantics: string;
+  level: number | null;
+  severity: string | null;
+  severity_status: string;
+  score_1e4: number | null;
+  score_status: string;
+  reference_score_1e4: number | null;
+  evidence: string[];
+  nodes: ChainNode[];
+  links: ChainLink[];
+  contextual_evidence: ContextualEvidence[];
+}
+
+export interface ChainExecutionResult {
+  contract: "chain-execution/1";
+  file_sha256: string;
+  analysis_id: string | null;
+  analysis_id_status: string;
+  canon_version: string;
+  semantics: string;
+  chains: Record<string, ChainDetail>;
+}
 export interface AnalysisResult {
   contract: "analysis-partial/1";
   schema_version: string;

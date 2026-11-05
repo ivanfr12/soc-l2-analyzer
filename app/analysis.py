@@ -10,6 +10,14 @@ from typing import Any, Literal
 
 from openpyxl import load_workbook
 
+from app.canonical import (
+    PROVISIONAL_STATUS,
+    analysis_id_from_fingerprint,
+    canonical_row,
+    content_sha256,
+    logical_fingerprint,
+)
+from app.chains import build_chain_execution, chain_summary
 from app.config import (
     ANALYSIS_SCHEMA_VERSION,
     CANON_VERSION,
@@ -84,6 +92,7 @@ class IngestedWorkbook:
     r13_events: tuple[R13Event, ...]
     r13_records_in_scope: int
     r13_conflicting_log_ids: tuple[str, ...]
+    canonical_rows: tuple[tuple[Any, ...], ...] = ()
 
 
 _REQUIRED_NON_NULL = (
@@ -203,6 +212,7 @@ def ingest_workbook(content: bytes) -> IngestedWorkbook:
         ) from exc
     records: list[SIEMRecord] = []
     issues: list[IngestIssue] = []
+    canonical_rows: list[tuple[Any, ...]] = []
     r01_candidates: list[SIEMRecord] = []
     r01_records_in_scope = 0
     r01_ids_in_scope: set[str] = set()
@@ -236,6 +246,17 @@ def ingest_workbook(content: bytes) -> IngestedWorkbook:
                 column: row[indexes[column]] if indexes[column] < len(row) else None
                 for column in REQUIRED_COLUMNS
             }
+            try:
+                canonical_rows.append(
+                    tuple(values[column] for column in REQUIRED_COLUMNS)
+                )
+                # Valida serialización temprana para evitar 500 posteriores.
+                canonical_row(tuple(values[column] for column in REQUIRED_COLUMNS))
+            except ValueError as exc:
+                raise WorkbookValidationError(
+                    "invalid_cell_value",
+                    "El workbook contiene un valor no canónico: " + str(exc),
+                ) from exc
             log_id = _text(values["Log_ID"])
             if log_id is not None and log_id.strip():
                 signatures = content_by_log_id.setdefault(log_id, [])
@@ -423,6 +444,7 @@ def ingest_workbook(content: bytes) -> IngestedWorkbook:
         r13_events=tuple(r13_events),
         r13_records_in_scope=r13_records_in_scope,
         r13_conflicting_log_ids=r13_conflicting_log_ids,
+        canonical_rows=tuple(canonical_rows),
     )
 
 
@@ -1133,6 +1155,20 @@ def _evaluate_rules(
 
 
 def analyze_workbook(content: bytes) -> dict[str, Any]:
+    result, _ = analyze_workbook_detailed(content)
+    return result
+
+
+def analyze_workbook_detailed(
+    content: bytes,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Devuelve el resultado de ``analysis-partial/1`` y el detalle de cadenas.
+
+    El detalle de cadenas se calcula una sola vez, a partir de las observaciones
+    ya emitidas, para que el endpoint independiente lo reutilice sin volver a
+    evaluar reglas.
+    """
+
     ingestion = ingest_workbook(content)
     rules, observations = _evaluate_rules(
         ingestion.records,
@@ -1154,6 +1190,18 @@ def analyze_workbook(content: bytes) -> dict[str, Any]:
         ingestion.r13_records_in_scope,
         ingestion.r13_conflicting_log_ids,
     )
+    chain_details = build_chain_execution(observations, ingestion.records)
+    result = _build_result(content, ingestion, rules, observations, chain_details)
+    return result, chain_details
+
+
+def _build_result(
+    content: bytes,
+    ingestion: IngestedWorkbook,
+    rules: dict[str, dict[str, Any]],
+    observations: list[dict[str, Any]],
+    chain_details: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     invalid_ip_count = sum(
         record.source_ip.category in ("invalid", "missing", "unknown")
         for record in ingestion.records
@@ -1167,41 +1215,23 @@ def analyze_workbook(content: bytes) -> dict[str, Any]:
         rule["status"] == "not_evaluable" for rule in rules.values()
     )
     not_evaluable_count = ingestion.records_seen - len(ingestion.records)
-    chains = {
-        chain_id: {
-            "status": (
-                "pending_reconciliation"
-                if chain_id == "C2"
-                else "not_evaluable"
-            ),
-            "ratified": True,
-            "reason": (
-                "La conciliación de C2 permanece pendiente por decisión ratificada."
-                if chain_id == "C2"
-                else "Falta la condición exacta de membership y enlaces admisibles."
-            ),
-        }
-        for chain_id in ("C1", "C2", "C3", "C4", "C5", "C6")
-    }
-    chains["C7"] = {
-        "status": "not_evaluable",
-        "ratified": False,
-        "reason": "C7 no se evalúa ni activa porque es un candidato no ratificado.",
-    }
+    chains = chain_summary(chain_details)
 
-    return {
+    result: dict[str, Any] = {
         "contract": "analysis-partial/1",
         "schema_version": ANALYSIS_SCHEMA_VERSION,
         "canon_version": CANON_VERSION,
         "analysis_id": None,
-        "analysis_id_status": "not_evaluable",
+        "analysis_id_status": PROVISIONAL_STATUS,
         "analysis_id_reason": (
-            "cj/1 canónica no puede verificarse sin los vectores y la serialización "
-            "aprobados; no se sustituye por un hash de bytes."
+            "cj/1 se calcula de forma determinista con la serialización "
+            "ratificada, pero la verificación con los tres vectores de D-7 sigue "
+            "pendiente; el identificador es provisional y no se declara cj/1 "
+            "completo."
         ),
         "file_sha256": file_sha256(content),
         "content_sha256": None,
-        "content_sha256_status": "not_evaluable",
+        "content_sha256_status": PROVISIONAL_STATUS,
         "status": "partial",
         "completion_status": "partial",
         "timezone_status": "undefined",
@@ -1215,9 +1245,16 @@ def analyze_workbook(content: bytes) -> dict[str, Any]:
             "rules_partially_executed": partial_count,
             "rules_pending": pending_count,
             "rules_not_evaluable": not_evaluable_rule_count,
-            "chains_not_evaluable": 5,
-            "chains_pending_reconciliation": 1,
-            "chains_not_ratified": 1,
+            "chains_not_evaluable": sum(
+                chain["status"] == "not_evaluable" for chain in chains.values()
+            ),
+            "chains_pending_reconciliation": sum(
+                chain["status"] == "pending_reconciliation"
+                for chain in chains.values()
+            ),
+            "chains_not_ratified": sum(
+                not chain["ratified"] for chain in chains.values()
+            ),
         },
         "rule_execution": rules,
         "chain_execution": chains,
@@ -1230,3 +1267,9 @@ def analyze_workbook(content: bytes) -> dict[str, Any]:
             "no_observations_means_no_rule_match_not_no_activity": True,
         },
     }
+
+    digest = content_sha256(ingestion.canonical_rows)
+    result["content_sha256"] = digest
+    fingerprint = logical_fingerprint(result)
+    result["analysis_id"] = analysis_id_from_fingerprint(fingerprint)
+    return result

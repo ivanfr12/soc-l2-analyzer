@@ -46,7 +46,12 @@ describe("ReportDownloads", () => {
       expect.any(AbortSignal),
     );
     expect(api.requestTechnicalReport).not.toHaveBeenCalled();
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
+    // El componente difiere la revocación 1000 ms para no cortar la descarga;
+    // el timeout por defecto de waitFor también es 1000 ms y produce carreras.
+    await waitFor(
+      () => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"),
+      { timeout: 2000 },
+    );
   });
 
   it("keeps report actions independent and blocks duplicate requests", async () => {

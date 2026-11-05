@@ -1868,8 +1868,10 @@ def test_original_workbook_loads_715_records_and_only_emits_traced_matches() -> 
     assert result["rule_execution"]["R13"]["records_in_scope"] == 21
     assert result["rule_execution"]["R13"]["records_evaluated"] == 21
     assert result["rule_execution"]["R13"]["matched_observation_count"] == 1
-    assert result["analysis_id"] is None
-    assert result["content_sha256"] is None
+    assert result["analysis_id"].startswith("A-")
+    assert result["content_sha256"] is not None
+    assert result["analysis_id_status"] == "provisional_unratified_vectors"
+    assert result["content_sha256_status"] == "provisional_unratified_vectors"
 
     evidence_ids = {
         (observation["rule_id"], evidence["Log_ID"])

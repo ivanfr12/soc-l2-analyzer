@@ -2,6 +2,7 @@ import type {
   AnalysisResult,
   ApiHealth,
   ApiMetadata,
+  ChainExecutionResult,
 } from "../types/analysis";
 
 export class ApiError extends Error {
@@ -111,6 +112,85 @@ function isCompleteness(value: unknown): boolean {
   );
 }
 
+function isChainNode(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.rule_id === "string" &&
+    isStringArray(value.log_ids) &&
+    isStringArray(value.hostnames) &&
+    isStringArray(value.users) &&
+    isStringArray(value.source_ips) &&
+    isStringOrNull(value.first_timestamp) &&
+    isStringOrNull(value.last_timestamp)
+  );
+}
+
+function isChainLink(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.from_rule === "string" &&
+    typeof value.to_rule === "string" &&
+    isStringArray(value.basis) &&
+    typeof value.delta_seconds === "number" &&
+    typeof value.window_seconds === "number"
+  );
+}
+
+function isContextualEvidence(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.rule_id === "string" &&
+    isStringArray(value.log_ids) &&
+    (value.basis === undefined || isStringArray(value.basis)) &&
+    (value.delta_seconds === undefined ||
+      typeof value.delta_seconds === "number") &&
+    (value.window_seconds === undefined ||
+      typeof value.window_seconds === "number") &&
+    (value.note === undefined || typeof value.note === "string")
+  );
+}
+
+function isChainDetail(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.chain_id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.status === "string" &&
+    typeof value.ratified === "boolean" &&
+    typeof value.reason === "string" &&
+    typeof value.semantics === "string" &&
+    isNumberOrNull(value.level) &&
+    isStringOrNull(value.severity) &&
+    typeof value.severity_status === "string" &&
+    isNumberOrNull(value.score_1e4) &&
+    typeof value.score_status === "string" &&
+    isNumberOrNull(value.reference_score_1e4) &&
+    isStringArray(value.evidence) &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isChainNode) &&
+    Array.isArray(value.links) &&
+    value.links.every(isChainLink) &&
+    Array.isArray(value.contextual_evidence) &&
+    value.contextual_evidence.every(isContextualEvidence)
+  );
+}
+
+function isChainExecutionResult(value: unknown): value is ChainExecutionResult {
+  if (!isRecord(value) || value.contract !== "chain-execution/1") {
+    return false;
+  }
+  if (
+    typeof value.file_sha256 !== "string" ||
+    !isStringOrNull(value.analysis_id) ||
+    typeof value.analysis_id_status !== "string" ||
+    typeof value.canon_version !== "string" ||
+    typeof value.semantics !== "string" ||
+    !isRecord(value.chains)
+  ) {
+    return false;
+  }
+  return Object.values(value.chains).every(isChainDetail);
+}
 function isAnalysisResult(value: unknown): value is AnalysisResult {
   if (!isRecord(value) || value.contract !== "analysis-partial/1") {
     return false;
@@ -159,6 +239,26 @@ function isAnalysisResult(value: unknown): value is AnalysisResult {
   );
 }
 
+export async function getChains(
+  file: File,
+  expectedFileSha256: string,
+): Promise<ChainExecutionResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("expected_file_sha256", expectedFileSha256);
+
+  const payload = await requestJson("/api/chains", {
+    method: "POST",
+    body: formData,
+  });
+  if (!isChainExecutionResult(payload)) {
+    throw new ApiError(
+      "La API respondió, pero el contrato no coincide con chain-execution/1.",
+    );
+  }
+  return payload;
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -171,7 +271,6 @@ async function readJson(response: Response): Promise<unknown> {
     );
   }
 }
-
 async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
   let response: Response;
   try {

@@ -1905,3 +1905,116 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Cadenas de correlacion */
+.chain-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.chain-card {
+  border: 1px solid var(--color-border, #d8dee9);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--color-surface, #ffffff);
+}
+.chain-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.chain-card__header h3 {
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
+}
+.chain-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.chain-status--executed {
+  background: #e6f4ea;
+  color: #1e6b3a;
+}
+.chain-status--pending {
+  background: #fff4e5;
+  color: #8a5a00;
+}
+.chain-status--not-evaluable {
+  background: #f1f3f5;
+  color: #495057;
+}
+.chain-card__semantics {
+  font-size: 0.8rem;
+  color: #5c677d;
+  margin: 0.75rem 0;
+}
+.chain-card__meta {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.chain-card__meta dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: #6c757d;
+}
+.chain-card__meta dd {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.chain-card__reason {
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.chain-card__block {
+  margin-top: 0.75rem;
+}
+.chain-card__block h4 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #6c757d;
+  margin: 0 0 0.25rem;
+}
+.chain-node-list,
+.chain-link-list,
+.chain-context-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.chain-node-list li,
+.chain-link-list li,
+.chain-context-list li {
+  font-size: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.chain-node__ids,
+.chain-card__ids {
+  font-size: 0.75rem;
+  color: #495057;
+  word-break: break-all;
+}
+.chain-card__block--context {
+  border-left: 3px solid #adb5bd;
+  padding-left: 0.75rem;
+}
+.chain-details__status,
+.chain-details__error {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+.chain-details__error {
+  color: #a61e4d;
+}

@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Fingerprint, Info } from "lucide-react";
 
-import type { AnalysisResult, Observation } from "../../types/analysis";
+import type { AnalysisResult, ChainExecutionResult, Observation } from "../../types/analysis";
+import { ApiError, getChains } from "../../services/api";
 import AnalysisSummary from "./AnalysisSummary";
+import ChainDetails from "./ChainDetails";
 import EvidenceDetails from "./EvidenceDetails";
 import ObservationsTable from "./ObservationsTable";
 import ReportDownloads from "./ReportDownloads";
@@ -19,6 +21,41 @@ export default function AnalysisDashboard({
 }: AnalysisDashboardProps) {
   const [selectedObservation, setSelectedObservation] =
     useState<Observation | null>(null);
+  const [chains, setChains] = useState<ChainExecutionResult | null>(null);
+  const [chainsLoading, setChainsLoading] = useState(false);
+  const [chainsError, setChainsError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!reportFile) {
+      setChains(null);
+      setChainsLoading(false);
+      setChainsError(null);
+      return;
+    }
+    const requestId = ++requestIdRef.current;
+    setChains(null);
+    setChainsLoading(true);
+    setChainsError(null);
+
+    void getChains(reportFile, result.file_sha256)
+      .then((payload) => {
+        if (requestId !== requestIdRef.current) return;
+        setChains(payload);
+      })
+      .catch((caught) => {
+        if (requestId !== requestIdRef.current) return;
+        const message =
+          caught instanceof ApiError
+            ? caught.message
+            : "No se pudieron consultar las cadenas de correlación.";
+        setChainsError(message);
+      })
+      .finally(() => {
+        if (requestId !== requestIdRef.current) return;
+        setChainsLoading(false);
+      });
+  }, [reportFile, result.file_sha256]);
 
   return (
     <>
@@ -89,6 +126,8 @@ export default function AnalysisDashboard({
             onSelect={setSelectedObservation}
           />
         </section>
+
+        <ChainDetails result={chains} loading={chainsLoading} error={chainsError} />
 
         <section className="analysis-footnotes">
           <div className="footnote-card">

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../services/api", () => ({
   ApiError: class ApiError extends Error {},
   analyzeFile: mocks.analyzeFile,
+  getChains: vi.fn().mockResolvedValue(null),
   getHealth: mocks.getHealth,
   getMetadata: mocks.getMetadata,
   requestExecutiveReport: vi.fn(),

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeFile,
   ApiError,
+  getChains,
   getHealth,
   getMetadata,
   requestExecutiveReport,
@@ -201,6 +202,133 @@ describe("API client", () => {
     expect(report.filename).toBe("SOC_L2_Informe_Ejecutivo.pdf");
   });
 
+  it("validates a chain-execution/1 response", async () => {
+    const payload = {
+      contract: "chain-execution/1",
+      file_sha256: "a".repeat(64),
+      analysis_id: "A-" + "b".repeat(32),
+      analysis_id_status: "provisional_unratified_vectors",
+      canon_version: "cj/1",
+      semantics: "observed_sequence_candidate",
+      chains: {
+        C1: {
+          chain_id: "C1",
+          name: "Cadena 1",
+          status: "executed",
+          ratified: true,
+          reason: "ok",
+          semantics: "observed_sequence_candidate",
+          level: 2,
+          severity: "Medium",
+          severity_status: "ratified",
+          score_1e4: null,
+          score_status: "not_evaluable_without_E_K_catalogs",
+          reference_score_1e4: 4500,
+          evidence: ["EVT-1"],
+          nodes: [
+            {
+              rule_id: "R01",
+              log_ids: ["EVT-1"],
+              hostnames: ["DC-01"],
+              users: ["CORP\\u"],
+              source_ips: ["203.0.113.74"],
+              first_timestamp: "2026-10-23T08:25:00",
+              last_timestamp: "2026-10-23T08:35:08",
+            },
+          ],
+          links: [
+            {
+              from_rule: "R01",
+              to_rule: "R02",
+              basis: ["same_source_ip"],
+              delta_seconds: 232,
+              window_seconds: 900,
+            },
+          ],
+          contextual_evidence: [
+            {
+              rule_id: "4672",
+              log_ids: ["EVT-2"],
+              basis: ["same_user"],
+              delta_seconds: 60,
+              window_seconds: 3600,
+              note: "contexto",
+            },
+          ],
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      ),
+    );
+    const file = new File(["workbook"], "events.xlsx");
+    await expect(getChains(file, "a".repeat(64))).resolves.toMatchObject({
+      contract: "chain-execution/1",
+      chains: { C1: { status: "executed" } },
+    });
+  });
+
+  it("rejects an invalid chain-execution contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ contract: "other/1" }), { status: 200 }),
+      ),
+    );
+    const file = new File(["workbook"], "events.xlsx");
+    await expect(getChains(file, "a".repeat(64))).rejects.toBeInstanceOf(
+      ApiError,
+    );
+  });
+
+  it("surfaces 409 analysis_not_cached", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: { code: "analysis_not_cached", message: "No hay análisis." },
+          }),
+          { status: 409 },
+        ),
+      ),
+    );
+    const file = new File(["workbook"], "events.xlsx");
+    await expect(getChains(file, "a".repeat(64))).rejects.toMatchObject({
+      status: 409,
+      code: "analysis_not_cached",
+    });
+  });
+
+  it("surfaces 409 file_hash_mismatch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: { code: "file_hash_mismatch", message: "Hash incorrecto." },
+          }),
+          { status: 409 },
+        ),
+      ),
+    );
+    const file = new File(["workbook"], "events.xlsx");
+    await expect(getChains(file, "a".repeat(64))).rejects.toMatchObject({
+      status: 409,
+      code: "file_hash_mismatch",
+    });
+  });
+
+  it("surfaces network errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
+    const file = new File(["workbook"], "events.xlsx");
+    await expect(getChains(file, "a".repeat(64))).rejects.toBeInstanceOf(
+      ApiError,
+    );
+  });
   it("parses JSON report errors instead of treating them as PDFs", async () => {
     vi.stubGlobal(
       "fetch",
