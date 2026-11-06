@@ -167,6 +167,7 @@ archivo al que tengas autorización de acceso y mantenelo fuera del control de
 versiones.
 
 ## Documentación
+Link de YouTube: https://www.youtube.com/watch?v=gI2qRcxXQMo&t=3s
 
 - [Evaluación del dataset](./docs/DATA_ASSESSMENT.md): perfil y limitaciones de
   los registros del desafío.
